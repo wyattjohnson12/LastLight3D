@@ -578,6 +578,7 @@ class View3D(fx3d.FX3D):
                 p1 = self.project(h.x + math.cos(a) * 8, h.y + math.sin(a) * 8, 24)
                 if p0 and p1:
                     arcade.draw_line(*p0, *p1, (190, 235, 255, 255), 5)
+        self.draw_swamp_air()     # swamp.py: spore pods in flight
 
     def draw_shots(self, vl):
         """Arrows and fire pots in the air (called in GUI space, drawn at their 3D spot)."""

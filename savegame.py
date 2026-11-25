@@ -22,6 +22,7 @@ import time
 import arcade
 
 from settings import *
+import swamp
 from world import LAYERS, Animal, Boss, Zombie
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -184,6 +185,7 @@ class SaveGame:
             "seed": self.seed, "clock": self.clock, "day": self.day, "kills": self.kills,
             "time_alive": self.time_alive, "cold_mult": self.cold_mult, "weather": self.weather_save(),
             "boss": [self.boss_num, self.boss_day, self.boss_hp],
+            "boss_order": list(BOSS_ORDER),     # so a save outlives changes to the boss rotation
             "nodes": [[n.idx, NODE_CODE[n.state], round(n.timer, 1), n.hp] for n in self.nodes
                       if n.state != "full" or n.hp != NODES[n.kind]["hp"]],
             "regrow": [[round(t, 1), n.idx] for t, n in self.regrow],
@@ -209,6 +211,7 @@ class SaveGame:
         self.weather_load(data.get("weather"))     # weather.py (older saves: clear skies)
         old = [max(0, (self.day - 1) // BOSS_EVERY), self.day + (-self.day) % BOSS_EVERY, None]  # saves from before
         self.boss_num, self.boss_day, self.boss_hp = data.get("boss", old)
+        self.boss_num = swamp.remap_boss_num(self.boss_num, data.get("boss_order"))   # older saves: no Mire Lurker
         default = next(d for d in DIFFICULTIES if d[0] == DEFAULT_DIFFICULTY)
         d = list(data["meta"].get("difficulty") or default)
         gap = d[3] if len(d) > 3 else BOSS_EVERY          # older saves didn't have this setting
