@@ -23,8 +23,10 @@ import arcade
 
 import art
 import art_bees
+import art_defenses
 import art_extra
 import art_gear
+import defenses
 import intro
 import local_coop
 import net
@@ -136,7 +138,7 @@ class Survivor:
 
 # =========================================================================== game
 class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
-                progress.Progress, weather.Weather, ui.UI, arcade.Window):
+                progress.Progress, weather.Weather, defenses.Defenses, ui.UI, arcade.Window):
     def __init__(self):
         super().__init__(W, H, SCREEN_TITLE)
         self.background_color = (24, 34, 22)
@@ -767,7 +769,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         ghost = arcade.Sprite(art.icon(item), center_x=x, center_y=y)
         ok = dist((x, y), p.pos) < 190 and 40 < x < L.size - 40 and 40 < y < L.size - 40
         if ok:
-            ok = not arcade.check_for_collision_with_lists(ghost, [L.solid, L.huts, L.zombies, L.traps, L.exits])
+            ok = not arcade.check_for_collision_with_lists(ghost, [L.solid, L.huts, L.zombies, L.traps, L.exits]
+                                                            + self.defense_blockers(L))
             if ok and item != "hut" and item not in TRAP_KINDS:
                 ok = not arcade.check_for_collision_with_list(ghost, self.player_list)
         return item, ghost, ok
@@ -805,7 +808,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             L.traps.append(s)
         else:
             L.builds.append(s)
-            L.solid.append(s)
+            if kind not in defenses.WALK_THROUGH:   # gates: survivors walk through, zombies don't
+                L.solid.append(s)
+        self.add_defense(s, L)          # defenses.py: gates, lanterns, turrets
         if kind in LIGHT_SOURCES:
             f = arcade.Sprite(art.flame(0), center_x=s.center_x, center_y=s.center_y + 6,
                               scale=1.0 if kind == "campfire" else 0.8)
@@ -1368,6 +1373,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                 self._update_bosses(dt)
                 self._update_hazards(dt)
                 self._update_shots(dt)
+                self._update_defenses(dt)     # defenses.py: turrets shoot
                 self._update_world(dt)
         else:
             if not self.cut:
@@ -1661,7 +1667,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         day_burn = L.name == "over" and not self.is_night and self.darkness < 0.5
         fires = [s for s in L.builds if s.kind in LIGHT_SOURCES and s.lit]
         guards = [a for a in L.animals if a.pet and a.info["job"] == "guard"]
-        blockers = [L.solid, L.huts]
+        blockers = [L.solid, L.huts] + self.defense_blockers(L)
         zl = list(L.zombies)
         for z in zl:
             tgt = min(alive, key=lambda p: dist(p.pos, z.position)) if alive else None
@@ -1692,6 +1698,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                 n = math.hypot(vx, vy) or 1
                 vx, vy = vx / n, vy / n
             step = z.speed * dt * (0.5 if z.chill > 0 else 1) * (0 if z.snared > 0 else 1)
+            step *= self.defense_slow(z)     # defenses.py: lanterns slow them down
             blocked_by, moved = self.step_body(z, vx * step, vy * step, blockers)
             nature = [b for b in blocked_by if not isinstance(b, Structure)]
             if nature and moved < step * 0.35 and z.detour <= 0:
@@ -2067,7 +2074,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                     b.center_x += vx * step
                     b.center_y += vy * step
                 else:
-                    blocked, moved = self.step_body(b, vx * step, vy * step, [L.solid, L.huts])
+                    blocked, moved = self.step_body(b, vx * step, vy * step, [L.solid, L.huts] + self.defense_blockers(L))
                     built = [s for s in blocked if isinstance(s, Structure)]
                     if built and b.timers.get("smash", 0) <= 0:
                         smash = 80 if b.state == "charge" else (60 if b.kind == "titan" else 30)
@@ -2274,6 +2281,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                     if n.shake > 0:
                         n.shake -= dt
                         n.center_x = n.base[0] + (math.sin(n.shake * 70) * 3 if n.shake > 0 else 0)
+        self.defense_visuals(dt)
         for b in self.structs.values():
             if b.flash > 0:
                 b.flash -= dt
@@ -3162,6 +3170,7 @@ def main():
             art.player(i)
         art_extra.all_new_textures()
         art_bees.all_textures()
+        art_defenses.all_textures()
         art.save_all(os.path.join(HERE, "art_export"))
         print("Saved every texture to the art_export/ folder.")
         return
