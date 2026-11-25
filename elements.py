@@ -45,6 +45,7 @@ BOSS_TYPES = {
     "brood": ["beast"],
     "wraith": ["frost", "shadow"],
     "colossus": ["fire"],
+    "mire": ["storm", "beast"],      # the Mire Lurker (swamp.py): a water beast - Stone Spikes (earth) beat it
 }
 ENEMY_TYPES = {                 # ordinary enemies (keys from ZOMBIES in settings.py)
     "walker": ["shadow"], "runner": ["shadow"], "brute": ["shadow"],
@@ -68,8 +69,8 @@ def types_of(enemy):
     if isinstance(info, dict) and "types" in info:
         return list(info["types"])
     kind = getattr(enemy, "kind", "")
-    if kind in BOSSES:
-        return list(BOSS_TYPES.get(kind, []))
+    if kind in BOSS_TYPES:
+        return list(BOSS_TYPES[kind])
     return list(ENEMY_TYPES.get(kind, []))
 
 
