@@ -24,6 +24,7 @@ from pyglet import gl
 from pyglet.math import Mat4, Vec3
 
 import art
+import fx3d
 import ui
 from settings import *
 
@@ -89,6 +90,7 @@ uniform float up_scale;
 uniform float lift;
 uniform float nudge;
 uniform int mode;
+uniform vec2 sun;       // shadows: direction * length, in shadow widths (fx3d.sun)
 void corner(mat4 mvp, vec2 p, float cx, float y, float zc, float fx, float sx) {
     vec4 q = mvp * vec4(cx + p.x, y, (zc + p.y) * up_scale, 1.0);
     q.x = (fx + p.x * sx) * q.w;
@@ -105,12 +107,17 @@ void main() {
     mat4 mvp = window.projection * window.view;
     gs_color = v_color[0];
     if (mode == 1) {
+        // soft blob shadow, stretched away from the sun; things up high (tree canopies) cast further
         float rx = hs.x * 0.55;
-        float ry = rx * 0.55;
-        gl_Position = mvp * vec4(c.x - rx, c.y + ry, 0.3, 1.0); gs_uv = vec2(-1.0, 1.0);  EmitVertex();
-        gl_Position = mvp * vec4(c.x - rx, c.y - ry, 0.3, 1.0); gs_uv = vec2(-1.0, -1.0); EmitVertex();
-        gl_Position = mvp * vec4(c.x + rx, c.y + ry, 0.3, 1.0); gs_uv = vec2(1.0, 1.0);   EmitVertex();
-        gl_Position = mvp * vec4(c.x + rx, c.y - ry, 0.3, 1.0); gs_uv = vec2(1.0, -1.0);  EmitVertex();
+        float ln = length(sun);
+        vec2 dir = ln > 0.001 ? sun / ln : vec2(0.0, -1.0);
+        vec2 side = vec2(-dir.y, dir.x) * rx * 0.95;
+        vec2 along = dir * rx * (0.5 + 0.6 * ln);
+        vec2 ctr = c.xy + dir * (rx * 0.5 + extra * 0.6) * ln;
+        gl_Position = mvp * vec4(ctr - along + side, 0.3, 1.0); gs_uv = vec2(-1.0, 1.0);  EmitVertex();
+        gl_Position = mvp * vec4(ctr - along - side, 0.3, 1.0); gs_uv = vec2(-1.0, -1.0); EmitVertex();
+        gl_Position = mvp * vec4(ctr + along + side, 0.3, 1.0); gs_uv = vec2(1.0, 1.0);   EmitVertex();
+        gl_Position = mvp * vec4(ctr + along - side, 0.3, 1.0); gs_uv = vec2(1.0, -1.0);  EmitVertex();
         EndPrimitive();
         return;
     }
@@ -140,6 +147,7 @@ uniform sampler2D sprite_texture;
 uniform vec4 spritelist_color;
 uniform int mode;
 uniform float alpha_cut;
+uniform float shade;     // shadow strength (fainter at night)
 in vec2 gs_uv;
 in vec4 gs_color;
 out vec4 f_color;
@@ -147,7 +155,9 @@ void main() {
     if (mode == 1) {
         float d = dot(gs_uv, gs_uv);
         if (d > 1.0) discard;
-        f_color = vec4(0.0, 0.0, 0.0, (1.0 - d) * 0.42 * gs_color.a * spritelist_color.a);
+        float k = 1.0 - d;
+        k = k * k * (3.0 - 2.0 * k);         // smooth soft edge, darker core
+        f_color = vec4(0.0, 0.0, 0.0, k * 0.5 * shade * gs_color.a * spritelist_color.a);
         return;
     }
     vec4 t = texture(sprite_texture, gs_uv);
@@ -195,7 +205,7 @@ def trunk():
 
 
 # =========================================================================== the mixin
-class View3D:
+class View3D(fx3d.FX3D):
     """Mixed into the game window. Replaces the flat camera with a tilted 3D one."""
 
     # ------------------------------------------------------------------ camera maths
@@ -267,6 +277,8 @@ class View3D:
         bill["up_scale"] = UP
         bill["lift"] = 0.0
         bill["nudge"] = 0.0
+        bill["sun"] = (0.0, -0.4)
+        bill["shade"] = 1.0
         self._progs3d = (flat, bill, ctx.program(vertex_shader=BOX_VS, fragment_shader=BOX_FS))
         self._ghost3d = arcade.SpriteList()
         self._wall_sig = {}
@@ -409,6 +421,12 @@ class View3D:
         trunks = self._trees(L, view)
         cave_geo = self._cave_walls(L) if vl == "cave" else None
         built_geo = self._built_walls(L)
+        self.fx_tick()               # fx3d.py: particles move once per frame (not once per split view)
+        dk = 0.93 if vl == "cave" else self.darkness
+        sx, sy, shade = fx3d.sun(self.phase if vl == "over" else 0.27, dk)
+        bill = self._progs3d[1]
+        bill["sun"] = (sx, sy)
+        bill["shade"] = shade
         self.use_world3d()
         gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
 
@@ -472,42 +490,25 @@ class View3D:
                 self._ghost3d.append(ghost)
                 self.stand(self._ghost3d, cut=0.05)
                 self._ghost3d.clear()
-            ctx.disable(ctx.DEPTH_TEST)
             t = self.tame_target()
             if t:
+                ctx.disable(ctx.DEPTH_TEST)
                 arcade.draw_circle_outline(t.center_x, t.center_y, 30, (255, 150, 190, 200), 2)
+        ctx.enable(ctx.DEPTH_TEST)
+        self.fx_draw_particles(vl, additive=False)    # chips, dust, blood, smoke (lit by the light map)
         ctx.disable(ctx.DEPTH_TEST)
 
         # ---- floating things, drawn on screen at their 3D spot
         self.gui.use()
         self.draw_air_hazards()
         self.draw_pet_marks(L)
-        for x, y, _, _, life, maxlife, col, size, *ly in self.particles:
-            if ly and ly[0] != vl:
-                continue
-            s = self.project(x, y, 22)
-            if s:
-                a = int(255 * max(0, life / maxlife))
-                arcade.draw_circle_filled(s[0], s[1], size * (0.5 + life / maxlife / 2), col + (a,))
 
-        # ---- night
-        dk = 0.93 if vl == "cave" else self.darkness
+        # ---- time of day: colour grading + light map (fx3d.py) - replaces the old darkness sheet
+        self.fx_lighting(L, vl, dk)
         if dk > 0:
-            W, H = ui.W, ui.H
-            centre = tuple(self.cam_pos) if self.cut else view
-            c = self.project(centre[0], centre[1], 18) or (W / 2, H / 2)
-            sq = math.sin(PITCH)     # a circle of light on the ground looks squashed from an angle
-            dtex = art.darkness(W * 2, H * 2, self.light_radius() if not self.cut else 330)
-            alpha = int(232 * dk)
-            arcade.draw_texture_rect(dtex, arcade.XYWH(c[0], c[1], W * 2, H * 2 * sq), alpha=alpha)
-            top, bot = c[1] + H * sq, c[1] - H * sq
-            if top < H:
-                arcade.draw_lrbt_rectangle_filled(0, W, top, H + 2, (0, 0, 0, alpha))
-            if bot > 0:
-                arcade.draw_lrbt_rectangle_filled(0, W, -2, bot, (0, 0, 0, alpha))
             self.use_world3d()
-            for g in L.glows:
-                g.alpha = int(200 * dk) + 30
+            for g in L.glows:      # a warm haze over each fire (the light map already lights the ground)
+                g.alpha = int(130 * dk) + 20
             blend = (ctx.SRC_ALPHA, ctx.ONE)
             self.flat(L.glows, blend=blend)
             ctx.enable(ctx.DEPTH_TEST)
@@ -524,7 +525,11 @@ class View3D:
             if vl == "cave":
                 for s in L.exits:
                     arcade.draw_circle_filled(s.center_x, s.center_y, 60, (255, 240, 200, 40))
-            self.gui.use()
+        self.use_world3d()           # embers, sparks and flames glow on top of the night
+        ctx.enable(ctx.DEPTH_TEST)
+        self.fx_draw_particles(vl, additive=True)
+        ctx.disable(ctx.DEPTH_TEST)
+        self.gui.use()
 
         self.draw_repair_bars(L)  # repair.py: holding the hammer shows how hurt buildings are
         self.draw_shots(vl)      # after the darkness: a burning fire pot shows up at night

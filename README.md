@@ -113,3 +113,9 @@ health = 2 stone + 1 wood). Holding the hammer shows health bars over damaged bu
 The camera lives in `settings.py`: `CAM_PITCH_DEG` (how steeply it looks down; 90 = straight down),
 `CAM_FOV_DEG` (field of view), and `CAVE_WALL_HEIGHT` / `BUILD_WALL_HEIGHT`. All the 3D drawing is in
 `view3d.py`; the game logic, co-op and networking are the same as the 2D version.
+
+Lighting and effects live in `fx3d.py`: the time-of-day colour grading (warm dawn, golden/purple dusk,
+blue night - edit the `_GRADE` table), the light pools from your torch, friends, campfires, braziers
+and fire pots, the sun direction for the soft shadows (long in the morning and evening, short at noon),
+and the particles (embers and smoke from fires, sparks and blood on hits, chips and dust when chopping
+and mining). Particles come from a fixed pool of `MAX_PARTS` slots, so they never slow the game down.
