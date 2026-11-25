@@ -7,3 +7,5 @@ lastlight_config.json
 art_export/
 # saved games (made by the game)
 saves/
+# achievements and all-time stats (made by the game)
+achievements.json

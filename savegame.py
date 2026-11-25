@@ -92,6 +92,7 @@ class SaveGame:
             "health": p.health, "hunger": p.hunger, "thirst": p.thirst, "energy": p.energy, "warmth": p.warmth,
             "inv": p.inv, "hotbar": p.hotbar, "equip": p.equip, "selected": p.selected,
             "alive": p.alive, "respawn_t": p.respawn_t, "kills": p.kills,
+            "stats": dict(getattr(p, "stats", None) or {}),     # progress.py run stats
         }
 
     def restore_player(self, p):
@@ -112,6 +113,7 @@ class SaveGame:
         p.equip = {s: (eq.get(s) if eq.get(s) in ITEMS else None) for s in ARMOR_SLOTS}
         p.selected = max(0, min(HOTBAR_SLOTS - 1, int(rec.get("selected", 0))))
         p.kills = int(rec.get("kills", 0))
+        p.stats = {k: int(v) for k, v in (rec.get("stats") or {}).items()}   # older saves: none
         layer = rec.get("layer", "over")
         self.set_layer(p, layer if layer in LAYERS else "over", (float(rec.get("x", 0)), float(rec.get("y", 0))))
         if not rec.get("alive", True):

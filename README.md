@@ -108,6 +108,18 @@ health = 2 stone + 1 wood). Holding the hammer shows health bars over damaged bu
 - **Spike Traps** wear out, and they hurt *you* if you stand on them - put them in the zombies' path.
 - **Iron Walls** have 700 health (stone walls 120).
 
+## Stats and achievements
+
+Every game keeps a tally for each survivor: nights survived, zombies and bosses killed, items crafted,
+structures built, animals tamed, times downed and resources gathered. It's saved with the game, and shown
+on the **pause screen** (ESC) and on the **run summary** you see when you leave a game to the title screen.
+
+There are 19 **achievements** (First Night, Boss Slayer, Zookeeper, Fortress, Hardened...). They count across
+all your games and pop up with a sound when you earn one. See them all with **Achievements** on the title
+screen. They're kept per computer in `achievements.json` - in online co-op each player earns their own on
+their own computer; in split screen everyone on the couch shares them. A boss kill counts for everyone
+alive on the surface when it falls.
+
 ## Tweaking the 3D camera
 
 The camera lives in `settings.py`: `CAM_PITCH_DEG` (how steeply it looks down; 90 = straight down),

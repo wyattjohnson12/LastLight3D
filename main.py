@@ -30,6 +30,7 @@ import local_coop
 import net
 import options
 import pets
+import progress
 import repair
 import savegame
 import ui
@@ -134,7 +135,7 @@ class Survivor:
 
 # =========================================================================== game
 class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
-                ui.UI, arcade.Window):
+                progress.Progress, ui.UI, arcade.Window):
     def __init__(self):
         super().__init__(W, H, SCREEN_TITLE)
         self.background_color = (24, 34, 22)
@@ -423,6 +424,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             self.start_cutscene(ev[1], ev[2], ev[3], ev[4], local=True, mode=mode, hp=hp)
         elif k == "cutend":
             self.cut = None
+        elif k == "stats":
+            self.progress_event(ev)      # progress.py: my run stats, sent by the host
 
     # ------------------------------------------------------------------ time of day
     @property
@@ -621,6 +624,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             if v - from_inv and use_store:
                 self.store_take(k, v - from_inv)
         self.give(p, rec["item"], rec["n"])
+        self.stat(p, "crafted")
         self._hotbar_add(p, rec["item"], force=True)
         self.play("craft", 0.3, to=p)
         extra = "  (click it in the backpack to wear it)" if ITEMS[rec["item"]]["kind"] == "armor" else ""
@@ -738,6 +742,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         if random.random() < a.info["chance"]:
             a.owner, a.mode, a.hp, a.aggro = p.id, "follow", a.max_hp, None
             a.name = self.random_pet_name(p)
+            self.on_tamed(p)
             self.burst(a.center_x, a.center_y, (255, 120, 160), 14, 90, 3, 0.9)
             self.play("tame", 0.35, to=p)
             self.say(f"You tamed a {a.kind} - meet {a.name}!  {a.info['desc']}  "
@@ -776,6 +781,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             return True
         self.take(p, item)
         s = self.add_structure(item, ghost.center_x, ghost.center_y, layer=p.layer)
+        self.on_built(p, item)
         self.burst(s.center_x, s.center_y, (200, 170, 120), 10, 90, layer=p.layer)
         self.play("place", 0.25, at=s.position, layer=p.layer)
         if item == "storage":
@@ -964,6 +970,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             return
         mult = w.get("harvest", {}).get(n.kind, 1) if item else 1
         got = self.harvest(n, mult)
+        self.stat(p, "gathered", sum(got.values()))
         for k, v in got.items():
             self.give(p, k, v, n.position if k == NODES[n.kind]["gives"] else None)
         if "honey" in got:
@@ -1114,6 +1121,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         self.play("kill", 0.15, at=z.position, layer=z.layer)
         if by:
             by.kills += 1
+            self.stat(by, "zombies")
             roll = random.random()
             if z.kind == "golem":
                 self.give(by, "crystal", 1, z.position)
@@ -1287,6 +1295,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                     self.give(p, k, v)
         if by:
             by.kills += 1
+        self.on_boss_killed(b, by)
         self.boss_num += 1
         self.boss_day = self.day + self.boss_gap
         self.boss_hp = None
@@ -1470,6 +1479,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                 tonight = (f"  Tonight {self.next_boss()['name']} returns." if self.boss_hp is not None
                            else "  Tonight a BOSS rises.")
             self.say(f"Day {self.day}. You survived the night." + tonight, 5)
+            self.on_new_day()    # progress.py: +1 night survived for everyone
             self.save_game()     # autosave every morning
         n_over = len(self.alive_players("over"))
         if self.is_night and n_over:
@@ -1512,6 +1522,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         p.alive = False
         p.health = 0
         p.attacking = False
+        self.stat(p, "downed")
         p.sprite.visible = False
         p.held.visible = False
         self.burst(p.sprite.center_x, p.sprite.center_y, (200, 40, 40), 24, 160, 4, 0.8, layer=p.layer)
@@ -2724,6 +2735,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         self.do_action(self.me, a, kw)
 
     def leave_game(self, note=""):
+        summary = self.run_summary()      # progress.py: grab the stats before the world goes
         if self.can_save():
             self.save_game()      # autosave on the way out
         self.local_end()
@@ -2737,6 +2749,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         self.menu = "main"
         self.menu_note = note
         self.setup(random.randrange(1 << 30))
+        self.show_summary(summary)
 
     # ------------------------------------------------------------------ starting
     def start(self, save=None):
@@ -2872,7 +2885,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             step = 30 if modifiers & arcade.key.MOD_SHIFT else 5
             self.diff_adjust(self.menu_sel, step if key in (arcade.key.RIGHT, arcade.key.D) else -step)
             return
-        if key == arcade.key.ESCAPE and self.menu in ("diff", "load", "save", "confirm"):
+        if key == arcade.key.ESCAPE and self.menu in ("diff", "load", "save", "confirm", "ach", "summary"):
             self.menu_back()
             return
         if self.menu == "load" and key in (arcade.key.DELETE, arcade.key.BACKSPACE):
@@ -3062,7 +3075,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                     self._stick_x = 0.2
                 elif abs(lx) < 0.3:
                     self._stick_x = 0
-            if "b" in pr and self.menu in ("diff", "load", "save", "confirm"):
+            if "b" in pr and self.menu in ("diff", "load", "save", "confirm", "ach", "summary"):
                 self.menu_back()
                 return
             if "x" in pr and self.menu == "load":
