@@ -13,8 +13,8 @@ Wi-Fi, or split-screen on one computer. Keyboard + mouse or an Xbox controller.
 2. Open Terminal (Mac) or Command Prompt (Windows) and run:
 
    ```
-   git clone https://github.com/wyattjohnson12/LastLight.git
-   cd LastLight
+   git clone https://github.com/wyattjohnson12/LastLight3D.git
+   cd LastLight3D
    pip3 install -r requirements.txt
    ```
    (Windows: use `pip` instead of `pip3`.)
@@ -22,7 +22,7 @@ Wi-Fi, or split-screen on one computer. Keyboard + mouse or an Xbox controller.
 ## Play
 
 ```
-cd LastLight
+cd LastLight3D
 python3 main.py
 ```
 (Windows: `python main.py`)
@@ -30,7 +30,7 @@ python3 main.py
 ## Get the newest version
 
 ```
-cd LastLight
+cd LastLight3D
 git pull
 ```
 That's it - run the game again and you have every update.
