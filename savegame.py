@@ -230,10 +230,9 @@ class SaveGame:
                 z.hp = hp
                 self.next_zid += 1
                 self.add_zombie(z)
-        n = self.day // BOSS_EVERY - 1
         for kind, x, y, hp, max_hp in data.get("bosses", []):
-            if kind in BOSSES:
-                b = Boss(kind, x, y, self.next_bid, max(0, n) // len(BOSS_ORDER))
+            if kind in BOSSES:    # same cycle as spawn_boss() gave it, so it hits just as hard after loading
+                b = Boss(kind, x, y, self.next_bid, int(self.boss_num) // len(BOSS_ORDER))
                 b.hp, b.max_hp = hp, max_hp
                 self.next_bid += 1
                 self.over.bosses.append(b)
@@ -251,7 +250,7 @@ class SaveGame:
             a.hp = hp
             a.carry = _items(carry)
             a.name = str(name or "")[:12]
-            a.armor = armor if armor in ITEMS else None
+            a.armor = armor if armor in ITEMS and ITEMS[armor]["kind"] == "petarmor" else None
             self.over.animals.append(a)
             self.amap[a.aid] = a
         self.away = dict(data.get("players", {}))

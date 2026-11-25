@@ -78,6 +78,8 @@ class Pets:
 
     def hurt_pet(self, a, dmg):
         """A zombie bit a pet: its armor soaks part of it."""
+        if a.hp <= 0:
+            return                                  # already died this frame (another zombie got it first)
         armor = ITEMS[a.armor]["armor"] if a.armor else 0
         a.hp -= dmg / (1 + armor * PET_ARMOR_SOAK)
         a.flash = 0.12
