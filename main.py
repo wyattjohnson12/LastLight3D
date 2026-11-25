@@ -28,6 +28,7 @@ import art_defenses
 import art_extra
 import art_gear
 import defenses
+import firstperson
 import intro
 import local_coop
 import net
@@ -138,7 +139,7 @@ class Survivor:
 
 
 # =========================================================================== game
-class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
+class LastLight(firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
                 progress.Progress, weather.Weather, defenses.Defenses, swamp.Swamp, ui.UI, arcade.Window):
     def __init__(self):
         super().__init__(W, H, SCREEN_TITLE)
@@ -1325,6 +1326,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         dt = min(dt, 1 / 20)
         self.flame_t += dt
         self.pad.poll(dt)
+        self.fp_tick(dt)                   # firstperson.py: mouse capture, controller looking
         if self.local and self.state == "playing":
             self.local_input(dt)
         else:
@@ -1407,6 +1409,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
     # --- local input -> my survivor
     def aim_world(self):
         me = self.me
+        if self.fp_on():
+            return self.fp_aim()         # firstperson.py: where you're looking
         if self.use_pad:
             return (me.sprite.center_x + math.cos(me.face) * 80, me.sprite.center_y + math.sin(me.face) * 80)
         return self.mouse_ground()   # where the mouse ray hits the 3D ground
@@ -1428,7 +1432,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                     dx, dy = pad.left
                 rest = rest or "x" in pad.down
                 attack = attack or "a" in pad.down or "rt" in pad.down
-            if pad.right != (0, 0):
+            if self.fp_on():
+                pass                     # first person: the right stick looks around (fp_tick)
+            elif pad.right != (0, 0):
                 me.face = math.atan2(pad.right[1], pad.right[0])
             elif (dx or dy) and not busy:
                 me.face = math.atan2(dy, dx)
@@ -1438,6 +1444,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         if busy:
             dx = dy = 0
             attack = False
+        if self.fp_on():
+            dx, dy = self.fp_move(me, dx, dy)   # firstperson.py: walk where you look
         me.move = (dx, dy)
         me.resting = rest
         me.attacking = attack and me.alive and not rest
@@ -2890,6 +2898,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             self.interact_key()
         elif key == arcade.key.F:
             self.action("pets")
+        elif key == arcade.key.V:
+            self.fp_toggle()             # firstperson.py
 
     def interact_key(self):
         me = self.me
@@ -2957,6 +2967,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         self.keys.discard(key)
 
     def on_mouse_motion(self, x, y, dx, dy):
+        if self.fp_mouse(dx, dy):          # firstperson.py: mouse looks around
+            self.use_pad = False
+            return
         x, y = self.to_layout(x, y)      # fullscreen: undo the scaling (options.py)
         self.mouse_screen = (x, y)
         if abs(dx) + abs(dy) > 2:
@@ -2967,6 +2980,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                     self.menu_sel = i
 
     def on_mouse_drag(self, x, y, dx, dy, buttons, modifiers):
+        if self.fp_mouse(dx, dy):          # firstperson.py: keep looking while you hold attack
+            return
         self.mouse_screen = self.to_layout(x, y)
 
     def on_mouse_press(self, x, y, button, modifiers):
@@ -3129,6 +3144,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         if "start" in pr:
             self.paused = True
             return
+        if "rightstick" in pr:
+            self.fp_toggle()             # firstperson.py
         me = self.me
         if not me:
             return

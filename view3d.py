@@ -91,6 +91,8 @@ uniform float lift;
 uniform float nudge;
 uniform int mode;
 uniform vec2 sun;       // shadows: direction * length, in shadow widths (fx3d.sun)
+uniform int fp;         // first person (firstperson.py): stand facing the camera instead
+uniform vec2 face_right;
 void corner(mat4 mvp, vec2 p, float cx, float y, float zc, float fx, float sx) {
     vec4 q = mvp * vec4(cx + p.x, y, (zc + p.y) * up_scale, 1.0);
     q.x = (fx + p.x * sx) * q.w;
@@ -127,6 +129,17 @@ void main() {
     float zc = hs.y + extra + lift;
     vec2 uv0, uv1, uv2, uv3;
     uvs(uv0, uv1, uv2, uv3);
+    if (fp == 1) {
+        vec2 fwd = vec2(-face_right.y, face_right.x);
+        vec2 base = c.xy - fwd * near;
+        vec2 q;
+        q = rot * vec2(-hs.x, hs.y);  gs_uv = uv0; gl_Position = mvp * vec4(base + face_right * q.x, (zc + q.y) * up_scale, 1.0); EmitVertex();
+        q = rot * vec2(-hs.x, -hs.y); gs_uv = uv2; gl_Position = mvp * vec4(base + face_right * q.x, (zc + q.y) * up_scale, 1.0); EmitVertex();
+        q = rot * vec2(hs.x, hs.y);   gs_uv = uv1; gl_Position = mvp * vec4(base + face_right * q.x, (zc + q.y) * up_scale, 1.0); EmitVertex();
+        q = rot * vec2(hs.x, -hs.y);  gs_uv = uv3; gl_Position = mvp * vec4(base + face_right * q.x, (zc + q.y) * up_scale, 1.0); EmitVertex();
+        EndPrimitive();
+        return;
+    }
     // Stand straight up on screen: keep each corner's real height and depth (so walls still hide
     // things properly), but take its left/right position from the feet. Without this, perspective
     // makes everything near the screen edges lean outwards like a fisheye lens.
@@ -211,22 +224,34 @@ class View3D(fx3d.FX3D):
     # ------------------------------------------------------------------ camera maths
     def _cam(self):
         """Camera for the current view: (eye, d, view w, view h)."""
+        eye, _, _, _, d, vw, vh = self._basis()
+        return eye, d, vw, vh
+
+    def _basis(self):
+        """(eye, forward, right, up, d, view w, view h). The tilted camera looks north and down;
+        first person (firstperson.py) looks out of your survivor's eyes."""
         vw, vh = ui.W, ui.H
+        if self.fp_on():
+            from firstperson import FP_FOV_DEG
+            d = (vh / 2) / math.tan(math.radians(FP_FOV_DEG) / 2)
+            cy, sy = math.cos(self.fp_yaw), math.sin(self.fp_yaw)
+            cp, sp = math.cos(self.fp_pitch), math.sin(self.fp_pitch)
+            return (self.fp_eye(), (cy * cp, sy * cp, sp), (sy, -cy, 0.0), (-cy * sp, -sy * sp, cp), d, vw, vh)
         d = (vh / 2) / TAN
         fx, fy = self.camera.position
-        eye = (fx, fy - d * math.cos(PITCH), d * math.sin(PITCH))
-        return eye, d, vw, vh
+        cp, sp = math.cos(PITCH), math.sin(PITCH)
+        eye = (fx, fy - d * cp, d * sp)
+        return eye, (0.0, cp, -sp), (1.0, 0.0, 0.0), (0.0, sp, cp), d, vw, vh
 
     def project(self, x, y, z=0.0):
         """World point -> screen position in GUI coordinates (None if it's behind the camera)."""
-        (ex, ey, ez), d, vw, vh = self._cam()
+        (ex, ey, ez), f, r, u, d, vw, vh = self._basis()
         rx, ry, rz = x - ex, y - ey, z - ez
-        cp, sp = math.cos(PITCH), math.sin(PITCH)
-        zc = ry * cp - rz * sp            # distance in front of the camera
+        zc = rx * f[0] + ry * f[1] + rz * f[2]           # distance in front of the camera
         if zc < 1:
             return None
-        xc = rx
-        yc = ry * sp + rz * cp
+        xc = rx * r[0] + ry * r[1] + rz * r[2]
+        yc = rx * u[0] + ry * u[1] + rz * u[2]
         return vw / 2 + xc * d / zc, vh / 2 + yc * d / zc
 
     def head(self, x, y, px):
@@ -235,10 +260,9 @@ class View3D(fx3d.FX3D):
 
     def ground_at(self, sx, sy):
         """Screen position (GUI coordinates) -> the point on the ground under it."""
-        (ex, ey, ez), d, vw, vh = self._cam()
-        cp, sp = math.cos(PITCH), math.sin(PITCH)
+        (ex, ey, ez), f, r, up, d, vw, vh = self._basis()
         u, v = (sx - vw / 2) / d, (sy - vh / 2) / d
-        dx, dy, dz = u, cp + v * sp, -sp + v * cp
+        dx, dy, dz = (f[i] + r[i] * u + up[i] * v for i in range(3))
         if dz > -1e-3:
             dz = -1e-3
         t = -ez / dz
@@ -253,10 +277,13 @@ class View3D(fx3d.FX3D):
 
     def use_world3d(self):
         self.camera.use()      # viewport + scissor (split screen) from the 2D camera
-        (ex, ey, ez), d, vw, vh = self._cam()
-        fx, fy = self.camera.position
-        self.projection = Mat4.perspective_projection(vw / vh, 20.0, 8000.0, FOV)
-        self.view = Mat4.look_at(Vec3(ex, ey, ez), Vec3(fx, fy, 0.0), Vec3(0.0, 0.0, 1.0))
+        (ex, ey, ez), f, _, _, d, vw, vh = self._basis()
+        if self.fp_on():
+            from firstperson import FP_FOV_DEG
+            self.projection = Mat4.perspective_projection(vw / vh, 3.0, 9000.0, FP_FOV_DEG)
+        else:
+            self.projection = Mat4.perspective_projection(vw / vh, 20.0, 8000.0, FOV)
+        self.view = Mat4.look_at(Vec3(ex, ey, ez), Vec3(ex + f[0], ey + f[1], ez + f[2]), Vec3(0.0, 0.0, 1.0))
 
     # ------------------------------------------------------------------ GPU bits
     def _init3d(self):
@@ -278,6 +305,8 @@ class View3D(fx3d.FX3D):
         bill["lift"] = 0.0
         bill["nudge"] = 0.0
         bill["sun"] = (0.0, -0.4)
+        bill["fp"] = 0
+        bill["face_right"] = (1.0, 0.0)
         bill["shade"] = 1.0
         self._progs3d = (flat, bill, ctx.program(vertex_shader=BOX_VS, fragment_shader=BOX_FS))
         self._ghost3d = arcade.SpriteList()
@@ -427,6 +456,13 @@ class View3D(fx3d.FX3D):
         bill = self._progs3d[1]
         bill["sun"] = (sx, sy)
         bill["shade"] = shade
+        fp = self.fp_on()
+        bill["fp"] = int(fp)
+        bill["face_right"] = (math.sin(self.fp_yaw), -math.cos(self.fp_yaw)) if fp else (1.0, 0.0)
+        if fp:
+            self.gui.use()
+            self.fp_draw_sky(vl)          # firstperson.py: sky to the horizon
+            self.fp_hide_me(True)
         self.use_world3d()
         gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
 
@@ -478,6 +514,8 @@ class View3D(fx3d.FX3D):
         if trunks is not None:
             self.stand(trunks, nudge=-1)
         self.stand(L.trees)
+        if fp:
+            self.fp_hide_me(False)
 
         # ---- build preview & tame target
         if self.state == "playing" and self.me and not self.ui_open and not self.cut:

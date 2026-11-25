@@ -60,6 +60,7 @@ That's it - run the game again and you have every update.
 | Pause / help | ESC | Menu |
 | Save game (on the pause screen) | S | X |
 | Fullscreen on / off | F11 or Cmd+F | |
+| First person on / off | V | Click the right stick |
 
 ## Saving and resuming
 
@@ -163,6 +164,14 @@ all your games and pop up with a sound when you earn one. See them all with **Ac
 screen. They're kept per computer in `achievements.json` - in online co-op each player earns their own on
 their own computer; in split screen everyone on the couch shares them. A boss kill counts for everyone
 alive on the surface when it falls.
+
+## First person mode
+
+Press **V** (or click the right stick on a controller) to see the world through your survivor's eyes.
+The mouse looks around, **W/S** walk forward and back, **A/D** step sideways, and attacking, chopping,
+mining and building all go where the crosshair points. Opening the backpack, storage, pets or pause menu
+frees the mouse so you can click. Cutscenes, being knocked down and split screen use the normal camera.
+The game remembers your choice. (Code: `firstperson.py`, camera maths in `view3d.py`.)
 
 ## Tweaking the 3D camera
 
