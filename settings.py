@@ -254,6 +254,14 @@ ITEMS = {
     "furnace":    {"name": "Furnace", "kind": "build", "hp": 140, "desc": "Smelts iron ore into ingots."},
     "storage":    {"name": "Storage Bin", "kind": "build", "hp": 160,
                    "desc": "TEAM storage, shared by everyone. Safe when you die. Craft straight out of it."},
+    # --- base defenses (defenses.py)
+    "arrow_turret": {"name": "Arrow Turret", "kind": "build", "hp": 150,
+                     "desc": "Shoots the nearest zombie or boss in range by itself (4 damage). Each shot uses one "
+                             "Arrow from TEAM STORAGE. Zombies attack it - fix it with the Repair Hammer."},
+    "gate":       {"name": "Gate", "kind": "build", "hp": 70,
+                   "desc": "A wall piece you and your pets walk straight through - zombies can't. Put it in your walls."},
+    "lantern":    {"name": "Lantern", "kind": "build", "hp": 40,
+                   "desc": "Zombies near it slow down to half speed, and it lights up the night around it."},
 }
 HANDS = {"name": "Fists", "damage": 1, "reach": 50, "cooldown": 0.40}
 ARMOR_SLOTS = ["head", "body", "cloak"]
@@ -317,6 +325,9 @@ CRAFT_TABS = {
         R("furnace", {"stone": 16, "wood": 4}, "workbench"),
         R("iron_wall", {"iron_ingot": 2, "stone": 2}, "workbench"),
         R("brazier", {"iron_ingot": 2, "coal": 3, "stone": 4}, "workbench"),
+        R("gate", {"wood": 5, "fiber": 2}),
+        R("lantern", {"wood": 3, "stone": 2, "fiber": 2}),
+        R("arrow_turret", {"wood": 8, "stone": 6, "iron_ore": 2}, "workbench"),
     ],
     "Supplies": [
         R("bandage", {"fiber": 3}),

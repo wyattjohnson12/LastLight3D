@@ -99,6 +99,21 @@ Craft a **Repair Hammer** (3 wood, 2 stone) and hit a damaged wall, fire, hut or
 back to full health, and costs part of its recipe: the more damage, the more it costs (a stone wall at half
 health = 2 stone + 1 wood). Holding the hammer shows health bars over damaged buildings.
 
+## Base defenses
+
+Three buildings in the **Build** tab help you hold your base:
+
+- **Arrow Turret** (workbench: 8 wood, 6 stone, 2 iron ore) - shoots the nearest zombie or boss within
+  about 10 tiles all by itself (4 damage). Every shot uses one **Arrow from Team Storage**, so build a
+  Storage Bin and keep it stocked. Zombies attack it (150 health) - fix it with the Repair Hammer.
+- **Gate** (5 wood, 2 fiber) - put it in your wall: you and your pets walk straight through, zombies
+  can't and have to break it down (70 health).
+- **Lantern** (3 wood, 2 stone, 2 fiber) - zombies near it move at half speed, and it lights up the
+  ground around it at night.
+
+Holding a turret or lantern shows how far it reaches before you place it. The code lives in
+`defenses.py` (logic) and `art_defenses.py` (art).
+
 ## Useful gear for boss fights
 
 - **Hunting Bow** (workbench) + **Arrows** - shoot from a safe distance.

@@ -472,6 +472,7 @@ class View3D:
                 self._ghost3d.append(ghost)
                 self.stand(self._ghost3d, cut=0.05)
                 self._ghost3d.clear()
+                self.draw_defense_preview(item, ghost)   # defenses.py: turret / lantern reach
             ctx.disable(ctx.DEPTH_TEST)
             t = self.tame_target()
             if t:
