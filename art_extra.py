@@ -622,7 +622,52 @@ def _paw_icon(img):
         _ball(img, (x - 4.5, y - 4.5, x + 4.5, y + 4.5), (230, 210, 190, 255))
 
 
+def _bow_icon(img):
+    arc = [(14 + 22 * math.sin(k / 12 * math.pi) * 0.9, 4 + k / 12 * 40) for k in range(13)]
+    _line(img, arc, (130, 86, 46, 255), 4)
+    _line(img, [arc[0], arc[-1]], (230, 230, 220, 230), 1.2)
+    _rrect(img, (30, 20, 37, 28), 2, (90, 60, 36, 255))     # grip
+
+
+def _arrows_icon(img):
+    for k, dy in enumerate((-7, 0, 7)):
+        y0 = 30 + dy
+        _line(img, [(6, y0 + 8), (38, y0 - 8)], (190, 150, 96, 255), 2.4)
+        _poly(img, [(36, y0 - 11), (45, y0 - 13), (40, y0 - 5)], (170, 176, 186, 255), (80, 84, 92, 255), 1)
+        _poly(img, [(5, y0 + 5), (11, y0 + 4), (9, y0 + 10), (3, y0 + 11)], (220, 80, 70, 255))
+
+
+def _fire_pot_icon(img):
+    _ball(img, (10, 16, 38, 44), (176, 96, 60))
+    _rrect(img, (17, 12, 31, 18), 2, (140, 74, 46, 255), (80, 40, 24, 255))
+    _line(img, [(24, 12), (27, 6)], (230, 220, 180, 255), 2)
+    _poly(img, [(25, 7), (29, 0), (33, 6), (29, 10)], (255, 150, 40, 255))
+    _poly(img, [(28, 6), (30, 2), (31, 6)], (255, 236, 150, 255))
+
+
+def _salve_icon(img):
+    _rrect(img, (11, 18, 37, 43), 6, (236, 172, 48, 255), (150, 96, 20, 255))
+    _rrect(img, (9, 11, 39, 19), 3, (150, 110, 70, 255), (90, 64, 40, 255))
+    _rrect(img, (16, 24, 32, 33), 2, (255, 236, 200, 230))
+    _line(img, [(24, 25), (24, 32)], (220, 70, 70, 255), 2.2)
+    _line(img, [(20, 28.5), (28, 28.5)], (220, 70, 70, 255), 2.2)
+
+
+def _bear_trap_icon(img):
+    _circle(img, 24, 24, 19, (96, 92, 88, 255), (50, 48, 46, 255), 2)
+    _circle(img, 24, 24, 12, (70, 60, 52, 255))
+    for k in range(12):          # teeth pointing in
+        a = k / 12 * math.tau
+        p1 = (24 + math.cos(a - 0.18) * 18, 24 + math.sin(a - 0.18) * 18)
+        p2 = (24 + math.cos(a + 0.18) * 18, 24 + math.sin(a + 0.18) * 18)
+        tip = (24 + math.cos(a) * 10, 24 + math.sin(a) * 10)
+        _poly(img, [p1, p2, tip], (200, 204, 210, 255))
+    _circle(img, 24, 24, 4, (150, 120, 70, 255), (60, 48, 30, 255), 1)     # trigger plate
+
+
 art.ICON_MAKERS.update({
+    "bow": _bow_icon, "arrows": _arrows_icon, "fire_pot": _fire_pot_icon, "honey_salve": _salve_icon,
+    "bear_trap": _bear_trap_icon,
     "meat": lambda img: _meat_icon(img), "cooked_meat": lambda img: _meat_icon(img, True),
     "hide": lambda img: _hide_icon(img), "leather": _leather_icon, "fur": _fur_icon,
     "iron_ore": _lump_icon((110, 100, 94), (200, 120, 70)), "coal": _lump_icon((50, 48, 50), (20, 20, 22)),

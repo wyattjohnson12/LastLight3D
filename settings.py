@@ -1,7 +1,12 @@
 # ----------------------------------------------------------------- window / world
 SCREEN_WIDTH = 1100
 SCREEN_HEIGHT = 720
-SCREEN_TITLE = "Last Light - Survive the Night"
+SCREEN_TITLE = "Last Light 3D - Survive the Night"
+# ----------------------------------------------------------------- 3D camera (see view3d.py)
+CAM_PITCH_DEG = 52         # how steeply the camera looks down (90 = straight down like the 2D game)
+CAM_FOV_DEG = 50           # vertical field of view
+CAVE_WALL_HEIGHT = 95      # how tall cave walls are
+BUILD_WALL_HEIGHT = 60     # how tall the walls you build are
 WORLD_SIZE = 3200          # the surface map is WORLD_SIZE x WORLD_SIZE pixels
 CAVE_SIZE = 2400           # the underground map
 CAVE_CELL = 60             # cave walls are built from cells this big
@@ -38,7 +43,21 @@ FIRE_WARM_RADIUS = 170
 DAY_CYCLE_SECONDS = 180    # one full day + night
 START_PHASE = 0.05         # start just after dawn
 DUSK_START, NIGHT_START, DAWN_START = 0.55, 0.65, 0.90
-BOSS_EVERY = 3             # a boss rises on night 3, 6, 9, ...
+BOSS_EVERY = 3             # the first boss rises on night 3; each next one 3 nights after the last is killed.
+                           # A boss that survives the night comes back every night until it's beaten.
+# Difficulty = how long the day and the night last, in real seconds. "Night" runs from dusk to dawn
+# (when the zombies are out); "day" is the rest. Pick one on the title screen, or set your own.
+DIFFICULTIES = [
+    #  name         day   night
+    ("Relaxed",     240,  45),
+    ("Default",     117,  63),     # the original 180-second cycle
+    ("Hard",        90,   90),
+    ("Nightmare",   60,   150),
+]
+DEFAULT_DIFFICULTY = "Default"
+CUSTOM_DAY_LIMITS = (30, 900)      # shortest / longest custom day, in seconds
+CUSTOM_NIGHT_LIMITS = (20, 600)    # shortest / longest custom night
+BOSS_GAP_LIMITS = (1, 10)          # "nights between bosses" setting (the default is BOSS_EVERY)
 
 # ----------------------------------------------------------------- enemies
 ZOMBIES = {
@@ -86,25 +105,25 @@ BEE_CARRY = 3              # honey a pet bee brings home per trip
 # ----------------------------------------------------------------- bosses
 # name, hp, speed, melee damage, size, intro lines, drops
 BOSSES = {
-    "titan": {"name": "THE QUAKE TITAN", "hp": 220, "speed": 55, "damage": 30, "radius": 52,
+    "titan": {"name": "THE QUAKE TITAN", "hp": 180, "speed": 55, "damage": 24, "radius": 52,
               "tag": "The ground itself is its weapon.",
               "moves": ["EARTHQUAKE - stomps send a shockwave out from it. Get far away or get hit.",
                         "BOULDER TOSS - hurls rocks. Move out of the red circles.",
                         "WALL BREAKER - smashes through anything you build."],
               "drops": {"titan_core": 2, "stone": 15, "iron_ore": 4}},
-    "brood": {"name": "THE BROOD MOTHER", "hp": 240, "speed": 80, "damage": 18, "radius": 48,
+    "brood": {"name": "THE BROOD MOTHER", "hp": 200, "speed": 80, "damage": 16, "radius": 48,
               "tag": "She never comes alone.",
               "moves": ["BROOD - keeps hatching fast little broodlings. Thin them out.",
                         "ACID SPIT - globs leave burning pools. Don't stand in green.",
                         "Kill the mother and the swarm stops."],
               "drops": {"chitin": 6, "meat": 4, "fiber": 8}},
-    "wraith": {"name": "THE FROST WRAITH", "hp": 260, "speed": 95, "damage": 16, "radius": 42,
+    "wraith": {"name": "THE FROST WRAITH", "hp": 220, "speed": 95, "damage": 14, "radius": 42,
                "tag": "It drinks the warmth from the world.",
                "moves": ["BLIZZARD - the night gets brutally cold. Fires near it go out.",
                          "ICE SHARDS - bursts of shards fly out in every direction.",
                          "BLINK - it vanishes and reappears behind you. Walls can't stop it."],
                "drops": {"frost_shard": 4, "crystal": 2}},
-    "colossus": {"name": "THE INFERNO COLOSSUS", "hp": 320, "speed": 70, "damage": 26, "radius": 56,
+    "colossus": {"name": "THE INFERNO COLOSSUS", "hp": 270, "speed": 70, "damage": 22, "radius": 56,
                  "tag": "Everything it touches burns.",
                  "moves": ["FIRE TRAIL - leaves burning ground wherever it walks.",
                            "METEOR RAIN - flaming rocks fall on the red circles.",
@@ -112,6 +131,19 @@ BOSSES = {
                  "drops": {"ember_heart": 2, "iron_ore": 6, "coal": 6}},
 }
 BOSS_ORDER = ["titan", "brood", "wraith", "colossus"]
+
+# ----------------------------------------------------------------- traps & ranged weapons
+SPIKE_ZOMBIE_DAMAGE = 3       # every 0.6s while a zombie stands on spikes
+SPIKE_WEAR = 3                # trap health lost per prick (Spike Trap has 24 -> about 8 pricks)
+SPIKE_PLAYER_DAMAGE = 6       # spikes hurt survivors standing on them too (every 0.8s)
+SPIKE_BOSS_DAMAGE = 8         # a boss crushes the trap - but takes a hit doing it
+BEAR_TRAP_HOLD = 3.0          # seconds a Bear Trap holds a zombie
+BEAR_TRAP_BOSS_HOLD = 2.0     # ...or a boss
+BEAR_TRAP_REARM = 4.0         # seconds before it can snap again
+ARROW_SPEED = 900
+FIRE_POT_RANGE = 380          # furthest you can throw a fire pot
+FIRE_POT_RADIUS = 95
+FIRE_POT_FLIGHT = 0.7         # seconds in the air
 
 # ----------------------------------------------------------------- items
 # kind: material | food | weapon | tool | build | armor
@@ -131,6 +163,7 @@ ITEMS = {
     "chitin":  {"name": "Brood Chitin", "kind": "material", "desc": "Dropped by the Brood Mother. Light and tough."},
     "frost_shard": {"name": "Frost Shard", "kind": "material", "desc": "Dropped by the Frost Wraith. Never melts."},
     "ember_heart": {"name": "Ember Heart", "kind": "material", "desc": "Dropped by the Inferno Colossus. Hot to the touch."},
+    "arrows":  {"name": "Arrows", "kind": "material", "desc": "Ammo for the Hunting Bow. Each shot uses one."},
     # --- food & healing
     "berries": {"name": "Berries", "kind": "food", "hunger": 14, "thirst": 3,
                 "desc": "Quick snack. +14 hunger. Rabbits and boars love them (taming)."},
@@ -144,6 +177,8 @@ ITEMS = {
                 "desc": "Sweet energy! +50 energy, +8 hunger. Raid beehives in trees. Bees can be tamed with it."},
     "bandage": {"name": "Bandage", "kind": "food", "health": 30, "desc": "Patch yourself up. +30 health."},
     "medkit":  {"name": "Crystal Medkit", "kind": "food", "health": 80, "desc": "+80 health. Glows faintly."},
+    "honey_salve": {"name": "Honey Salve", "kind": "food", "health": 45, "energy": 20,
+                    "desc": "+45 health, +20 energy. Honey and plant fiber - great mid-fight."},
     # --- weapons & tools
     "club":    {"name": "Wooden Club", "kind": "weapon", "damage": 2.5, "reach": 58, "cooldown": 0.45,
                 "desc": "Bonk. 2.5 damage."},
@@ -166,6 +201,10 @@ ITEMS = {
                     "slow": 1, "desc": "7 damage, huge reach. Chills enemies so they slow down."},
     "titan_hammer": {"name": "Titan Hammer", "kind": "weapon", "damage": 12, "reach": 76, "cooldown": 0.9,
                      "quake": 1, "desc": "12 damage to EVERYTHING around you. Slow but devastating."},
+    "bow":     {"name": "Hunting Bow", "kind": "weapon", "damage": 5, "reach": 560, "cooldown": 0.65, "ranged": 1,
+                "desc": "Shoots where you aim, 5 damage. Uses Arrows from your backpack. Keep your distance!"},
+    "fire_pot": {"name": "Fire Pot", "kind": "throw", "damage": 18,
+                 "desc": "Right-click to throw where you aim: bursts into flame, 18 damage + burning. Won't hurt friends."},
     "ember_blade": {"name": "Ember Blade", "kind": "weapon", "damage": 9, "reach": 74, "cooldown": 0.36,
                     "burn": 1, "desc": "9 damage and sets enemies on fire."},
     # --- armor & clothing (slot: head | body | cloak)
@@ -188,8 +227,12 @@ ITEMS = {
     # --- buildings
     "wood_wall":  {"name": "Wood Wall", "kind": "build", "hp": 45, "desc": "Blocks zombies. Right-click to place."},
     "stone_wall": {"name": "Stone Wall", "kind": "build", "hp": 120, "desc": "Tough wall."},
-    "iron_wall":  {"name": "Iron Wall", "kind": "build", "hp": 280, "desc": "Very tough wall."},
-    "spike_trap": {"name": "Spike Trap", "kind": "build", "hp": 24, "desc": "Hurts zombies that walk over it."},
+    "iron_wall":  {"name": "Iron Wall", "kind": "build", "hp": 700,
+                   "desc": "Very tough wall: 700 health (a stone wall has 120). Even a boss needs a while."},
+    "spike_trap": {"name": "Spike Trap", "kind": "build", "hp": 24,
+                   "desc": "Hurts zombies that walk over it - and YOU if you stand on it. Wears out. Put it in their path."},
+    "bear_trap":  {"name": "Bear Trap", "kind": "build", "hp": 60,
+                   "desc": "Snaps shut on an enemy and holds it 3s - even a boss (2s). Re-arms itself. Breaks after a few snaps."},
     "campfire":   {"name": "Campfire", "kind": "build", "hp": 60,
                    "desc": "Light and warmth. Scares walkers. Cook food. Rest here to heal."},
     "brazier":    {"name": "Iron Brazier", "kind": "build", "hp": 160,
@@ -205,6 +248,7 @@ ITEMS = {
 HANDS = {"name": "Fists", "damage": 1, "reach": 50, "cooldown": 0.40}
 ARMOR_SLOTS = ["head", "body", "cloak"]
 LIGHT_SOURCES = ("campfire", "brazier")
+TRAP_KINDS = ("spike_trap", "bear_trap")     # lie flat on the ground, don't block anyone
 STATIONS = {"workbench": "Workbench", "furnace": "Furnace", "campfire": "Campfire"}
 
 # what each resource node gives, its hp and whether it needs a pickaxe
@@ -234,6 +278,7 @@ CRAFT_TABS = {
         R("iron_pickaxe", {"wood": 2, "iron_ingot": 3}, "workbench"),
         R("iron_sword", {"wood": 1, "iron_ingot": 4, "leather": 1}, "workbench"),
         R("frost_spear", {"wood": 3, "iron_ingot": 2, "frost_shard": 2}, "workbench"),
+        R("bow", {"wood": 6, "fiber": 5}, "workbench"),
         R("titan_hammer", {"iron_ingot": 5, "titan_core": 1, "leather": 2}, "workbench"),
         R("ember_blade", {"iron_ingot": 4, "ember_heart": 1, "crystal": 2}, "workbench"),
     ],
@@ -251,6 +296,7 @@ CRAFT_TABS = {
         R("campfire", {"wood": 5, "stone": 3}),
         R("wood_wall", {"wood": 3}),
         R("spike_trap", {"wood": 3, "stone": 2}),
+        R("bear_trap", {"iron_ore": 2, "wood": 3, "fiber": 2}, "workbench"),
         R("workbench", {"wood": 12, "stone": 6}),
         R("storage", {"wood": 10, "fiber": 4}),
         R("stone_wall", {"stone": 4, "wood": 1}, "workbench"),
@@ -261,6 +307,9 @@ CRAFT_TABS = {
     ],
     "Supplies": [
         R("bandage", {"fiber": 3}),
+        R("arrows", {"wood": 2, "stone": 1, "fiber": 1}, n=6),
+        R("fire_pot", {"stone": 2, "fiber": 2, "wood": 2}, "campfire", n=2),
+        R("honey_salve", {"honey": 1, "fiber": 2}),
         R("stew", {"berries": 3, "water": 1}, "campfire"),
         R("cooked_meat", {"meat": 1}, "campfire"),
         R("leather", {"hide": 2}, "workbench"),

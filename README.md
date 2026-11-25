@@ -1,6 +1,7 @@
-# Last Light
+# Last Light 3D
 
-A top-down survival game: gather by day, build by dusk, survive the night.
+The 3D version of Last Light - same game, now seen through a tilted 3D camera with real walls,
+standing trees and perspective. A survival game: gather by day, build by dusk, survive the night.
 Craft at a workbench, smelt iron, wear armor, tame pets, share a team storage bin,
 explore the caves, and survive a boss every third night. Play solo, online co-op over
 Wi-Fi, or split-screen on one computer. Keyboard + mouse or an Xbox controller.
@@ -56,3 +57,41 @@ That's it - run the game again and you have every update.
 | Pet orders | F | D-pad down |
 | Rest | SHIFT | hold X |
 | Pause / help | ESC | Menu |
+| Save game (on the pause screen) | S | X |
+| Fullscreen on / off | F11 or Cmd+F | |
+
+## Saving and resuming
+
+Every game saves itself every morning, when you leave to the title screen, and when you close the
+window. Press **S** on the pause screen to save any time. To resume, pick **Load saved game** on the
+title screen, choose a save, then play it solo, host it for co-op, or play it split screen.
+Co-op friends get their own backpack, armor and pets back if they join with **the same name** as last
+time. Saves live in the `saves/` folder.
+
+## Difficulty (day & night length, boss timing)
+
+On the title screen, **Difficulty** sets how many real seconds the day and the night last:
+Relaxed (240s / 45s), Default (117s / 63s), Hard (90s / 90s), Nightmare (60s / 150s), or your own custom
+times (day 30-900s, night 20-600s), plus **nights between bosses** (1-10, default 3). Every saved game
+keeps its own settings, but you can switch a save to the title-screen settings when you resume it.
+
+## Bosses
+
+The first boss rises on night 3 (or whatever "nights between bosses" is set to). If you don't kill it,
+it retreats at dawn - keeping every wound you gave it - and comes back the next night, and every night
+after, until it's beaten. Kill it, and the next boss comes 3 nights later.
+
+## Useful gear for boss fights
+
+- **Hunting Bow** (workbench) + **Arrows** - shoot from a safe distance.
+- **Fire Pot** (made at a campfire) - throw it with right-click: fire damage to everything it lands on.
+- **Bear Trap** (workbench) - holds a zombie for 3s, or a boss for 2s. Re-arms itself.
+- **Honey Salve** - +45 health, +20 energy.
+- **Spike Traps** wear out, and they hurt *you* if you stand on them - put them in the zombies' path.
+- **Iron Walls** have 700 health (stone walls 120).
+
+## Tweaking the 3D camera
+
+The camera lives in `settings.py`: `CAM_PITCH_DEG` (how steeply it looks down; 90 = straight down),
+`CAM_FOV_DEG` (field of view), and `CAVE_WALL_HEIGHT` / `BUILD_WALL_HEIGHT`. All the 3D drawing is in
+`view3d.py`; the game logic, co-op and networking are the same as the 2D version.

@@ -8,6 +8,7 @@ import arcade
 
 import art
 import art_extra  # noqa: F401  (registers the new icons)
+import savegame
 from settings import *
 
 W, H = SCREEN_WIDTH, SCREEN_HEIGHT
@@ -70,88 +71,10 @@ class UI:
             self.gui.use()
             arcade.draw_lrbt_rectangle_filled(0, W, 0, H, bg)
         else:
-            self.clear(color=bg)
-        self.camera.use()
-        L.ground.draw()
-        L.decor.draw()
-        L.ponds.draw()
-        L.exits.draw()
-        L.traps.draw()
-        self.draw_ground_hazards()
-        L.bushes.draw()
-        L.rocks.draw()
-        L.builds.draw()
-        L.flames.draw()
-        L.animals.draw()
-        self.cloak_list.draw()
-        self.player_list.draw()
-        self.gear_list.draw()
-        self.held_list.draw()
-        L.zombies.draw()
-        L.bosses.draw()
-        my_hut = self.me.in_hut if self.me else None
-        for hsp in L.huts:
-            inside = hsp is my_hut or any(p.in_hut is hsp for p in self.players.values())
-            hsp.alpha = 110 if inside else 255
-        L.huts.draw()
-        L.trees.draw()
-        L.walls.draw()
-        self.draw_air_hazards()
-        self.draw_pet_marks(L)
-
-        if self.state == "playing" and self.me and not self.ui_open and not self.cut:
-            pl = self.placement(self.me, self.aim_world())
-            if pl:
-                item, ghost, ok = pl
-                ghost.alpha = 150
-                ghost.color = (150, 255, 150) if ok else (255, 110, 110)
-                arcade.draw_sprite(ghost)
-            t = self.tame_target()
-            if t:
-                arcade.draw_circle_outline(t.center_x, t.center_y, 30, (255, 150, 190, 200), 2)
-
-        for x, y, _, _, life, maxlife, col, size, *ly in self.particles:
-            if ly and ly[0] != vl:
-                continue
-            a = int(255 * max(0, life / maxlife))
-            arcade.draw_circle_filled(x, y, size * (0.5 + life / maxlife / 2), col + (a,))
-        for x, y, r0, r1, t, dur, col, *ly in self.rings:
-            if ly and ly[0] != vl:
-                continue
-            k = t / dur
-            arcade.draw_circle_outline(x, y, r0 + (r1 - r0) * k, col + (int(230 * (1 - k)),), 6 * (1 - k) + 2)
-
-        dk = 0.93 if vl == "cave" else self.darkness
-        if dk > 0:
-            view = self.view_pos() if not self.cut else tuple(self.cam_pos)
-            dtex = art.darkness(W * 2, H * 2, self.light_radius() if not self.cut else 330)
-            arcade.draw_texture_rect(dtex, arcade.XYWH(view[0], view[1], W * 2, H * 2), alpha=int(232 * dk))
-            for g in L.glows:
-                g.alpha = int(200 * dk) + 30
-            blend = (self.ctx.SRC_ALPHA, self.ctx.ONE)
-            L.glows.draw(blend_function=blend)
-            L.flames.draw()
-            for e in L.eyes:
-                e.alpha = int(255 * dk)
-            L.eyes.draw(blend_function=blend)
-            for p in self.players.values():   # teammates carry a little lantern so you can find them
-                if p is not self.me and p.alive and p.layer == vl:
-                    arcade.draw_circle_filled(p.sprite.center_x, p.sprite.center_y, 30, p.color + (int(70 * dk),))
-            for b in L.bosses:     # bosses are always visible - terrifying silhouettes
-                arcade.draw_circle_filled(b.center_x, b.center_y, b.radius + 30, (255, 80, 40, int(40 * dk)))
-            if vl == "cave":
-                for s in L.exits:
-                    arcade.draw_circle_filled(s.center_x, s.center_y, 60, (255, 240, 200, 40))
-        for t, life, *ly in self.popups:
-            if ly and ly[0] != vl:
-                continue
-            t.color = t.color[:3] + (int(255 * min(1, life * 2)),)
-            t.draw()
-        if len(self.players) > 1:
-            for p in self.players.values():
-                if p.alive and p.layer == vl:
-                    self.txt(f"tag{p.id}", p.name, p.sprite.center_x, p.sprite.center_y + 30, p.color + (220,), 10,
-                             anchor_x="center", bold=True)
+            self.clear(color=(0, 0, 0))     # black bars around the game in fullscreen
+            self.gui.use()
+            arcade.draw_lrbt_rectangle_filled(0, W, 0, H, bg)
+        self.draw_world_3d(L, vl)   # view3d.py
 
         self.gui.use()
         if self.state == "title":
@@ -313,9 +236,9 @@ class UI:
         arcade.draw_texture_rect(art.icon("moon" if night else "sun"), arcade.XYWH(W - 200, H - 50, 44, 44))
         self.txt("day", f"Day {self.day}", W - 170, H - 44, (255, 255, 255), 18, bold=True)
         if night:
-            sub = f"Dawn in {int((DAWN_START - p) * DAY_CYCLE_SECONDS)}s"
+            sub = f"Dawn in {int(self.secs_until(DAWN_START))}s"
         else:
-            sub = f"Night in {int(((DUSK_START - p) % 1) * DAY_CYCLE_SECONDS)}s"
+            sub = f"Night in {int(self.secs_until(DUSK_START))}s"
         self.txt("daysub", sub, W - 170, H - 66, (200, 210, 230), 12)
         self.txt("kills", f"Kills {self.kills}", W - 24, H - 44, (230, 120, 110), 12, anchor_x="right")
         bar_w = 196
@@ -325,7 +248,13 @@ class UI:
         arcade.draw_lrbt_rectangle_filled(W - 221 + bar_w * p, W - 219 + bar_w * p, H - 85, H - 75, (255, 230, 150))
         y = H - 106
         if self.boss_night:
-            self.txt("bossnight", "BOSS NIGHT", W - 18, y, (255, 110, 90), 11, anchor_x="right", bold=True)
+            label = "BOSS RETURNS TONIGHT" if self.boss_hp is not None else "BOSS NIGHT"
+            self.txt("bossnight", label, W - 18, y, (255, 110, 90), 11, anchor_x="right", bold=True)
+            y -= 16
+        else:
+            n = self.boss_day - self.day
+            self.txt("bossnext", f"Next boss in {n} night{'s' if n > 1 else ''}", W - 18, y, (200, 170, 160), 10,
+                     anchor_x="right")
             y -= 16
         if self.view_layer == "cave":
             self.txt("cavetag", "UNDERGROUND", W - 18, y, (190, 170, 255), 11, anchor_x="right", bold=True)
@@ -423,6 +352,13 @@ class UI:
         if t:
             return f"{use}  try to tame the {t.kind} ({int(t.info['chance'] * 100)}% chance)"
         sel = me.hotbar[me.selected]
+        if sel and ITEMS[sel]["kind"] == "throw":
+            return f"{use}  throw {ITEMS[sel]['name']} where you aim  ({me.inv.get(sel, 0)} left)"
+        if sel and ITEMS[sel].get("ranged"):
+            n = me.inv.get("arrows", 0)
+            if not n:
+                return "No arrows!  Craft Arrows in the Supplies tab (wood, stone, fiber)"
+            return f"{'RT / A' if pad else 'Left-click'}  shoot where you aim   ({n} arrows)"
         if sel and ITEMS[sel]["kind"] == "build":
             return f"{use}  place {ITEMS[sel]['name']}"
         if sel and ITEMS[sel]["kind"] == "food":
@@ -685,6 +621,9 @@ class UI:
     # ------------------------------------------------------------------ boss intro
     def draw_cutscene(self):
         c = self.cut
+        if c.get("mode") == "retreat":
+            self.draw_retreat()
+            return
         t, dur = c["t"], c["dur"]
         info = BOSSES[c["kind"]]
         k = ease(t / 0.8) if t < dur - 0.8 else ease((dur - t) / 0.8)
@@ -721,16 +660,96 @@ class UI:
         skip = "A / START to skip" if self.use_pad else "ENTER / click to skip"
         self.txt("cut_skip", skip, W - 20, 30, (180, 180, 180, int(200 * k)), 11, anchor_x="right")
 
+    def draw_retreat(self):
+        """Dawn cutscene: the boss gets away - but it'll be back."""
+        c = self.cut
+        t, dur = c["t"], c["dur"]
+        info = BOSSES[c["kind"]]
+        k = ease(t / 0.8) if t < dur - 0.8 else ease((dur - t) / 0.8)
+        bar = 80 * k
+        arcade.draw_lrbt_rectangle_filled(0, W, H - bar, H, (0, 0, 0, 255))
+        arcade.draw_lrbt_rectangle_filled(0, W, 0, bar, (0, 0, 0, 255))
+        fade = ease((t - 0.5) / 0.6) * (ease((dur - 0.4 - t) / 0.5) if t > dur - 0.9 else 1)
+        if fade > 0:
+            a = int(255 * fade)
+            self.txt("ret_d", f"DAWN  -  NIGHT {c['night']} SURVIVED", W / 2, H - 52, (255, 220, 160, a), 14,
+                     anchor_x="center", bold=True)
+            self.txt("ret_ns", f"{info['name']} RETREATS", W / 2 + 3, H / 2 + 137, (0, 0, 0, a), 38,
+                     anchor_x="center", bold=True)
+            self.txt("ret_n", f"{info['name']} RETREATS", W / 2, H / 2 + 140, (255, 150, 100, a), 38,
+                     anchor_x="center", bold=True)
+            if t > 1.4:
+                la = int(255 * fade * ease((t - 1.4) / 0.5))
+                self.txt("ret_l", "...but it will be back tomorrow night.", W / 2, H / 2 + 98, (240, 230, 220, la), 19,
+                         anchor_x="center")
+            if t > 2.2 and c.get("hp"):
+                la = int(255 * fade * ease((t - 2.2) / 0.5))
+                self.txt("ret_h", c["hp"], W / 2, 46,
+                         (230, 190, 170, la), 13, anchor_x="center")
+        skip = "A / START to skip" if self.use_pad else "ENTER / click to skip"
+        self.txt("cut_skip", skip, W - 20, 20, (180, 180, 180, int(200 * k)), 11, anchor_x="right")
+
     # ------------------------------------------------------------------ screens
     def menu_items(self):
         if self.menu == "main":
-            return ["Play solo", "Host co-op game", "Join co-op game", "Local co-op (split screen)", "Quit"]
+            name, day, night, gap = self.chosen_difficulty()
+            return ["Play solo", "Host co-op game", "Join co-op game", "Local co-op (split screen)",
+                    "Load saved game", f"Difficulty:  {name}  ({day}s / {night}s,  boss every {gap} nights)",
+                    f"Fullscreen:  {'On' if self.fullscreen else 'Off'}   (F11)", "Quit"]
         if self.menu == "local":
             return []
+        if self.menu == "diff":
+            cur = self.chosen_difficulty()[0]
+            rows = [("\u2022 " if name == cur else "") + self.difficulty_label(name, day, night)
+                    for name, day, night in DIFFICULTIES]
+            day, night = self.custom_times()
+            mark = "\u2022 " if cur == "Custom" else ""
+            gap = self.chosen_difficulty()[3]
+            return rows + [f"<      {mark}Custom day:  {day}s      >", f"<      {mark}Custom night:  {night}s      >",
+                           f"<      Nights between bosses:  {gap}      >", "Back"]
+        if self.menu == "load":
+            page = self.save_list[self.save_page * 5:(self.save_page + 1) * 5]
+            rows = [savegame.save_label(meta) for _, meta in page]
+            if len(self.save_list) > 5:
+                pages = (len(self.save_list) + 4) // 5
+                rows.append(f"More saves...   (page {self.save_page + 1} of {pages})")
+            return rows + ["Back"]
+        if self.menu == "save":
+            saved = self.picked_difficulty()
+            now = self.chosen_difficulty()
+            rows = ["Play solo", "Host co-op game", "Local co-op (split screen)"]
+            if tuple(saved) != tuple(now):
+                use = self.use_title_difficulty
+                d = now if use else saved
+                gap = d[3] if len(d) > 3 else BOSS_EVERY
+                rows.append(f"Difficulty:  {d[0]} {d[1]}s / {d[2]}s, boss every {gap}   "
+                            f"({'title-screen setting' if use else 'as saved'})")
+            rows.append("Delete this save - pick again to confirm" if self.confirm_delete else "Delete this save")
+            return rows + ["Back"]
         games = self.finder.list() if self.finder else []
         return [f"{v[0]}'s game   ({v[1]}/4)   {k[0]}" for k, v in games] + ["Connect to IP:  " + self.ip_text, "Back"]
 
-    def menu_pick(self, i):
+    def picked_difficulty(self):
+        meta = self.picked_save[1] if self.picked_save else {}
+        return meta.get("difficulty") or self.chosen_difficulty()
+
+    def menu_back(self):
+        back = {"diff": ("main", 5), "load": ("main", 4), "save": ("load", 0)}
+        self.menu, self.menu_sel = back.get(self.menu, ("main", 0))
+        self.menu_note = ""
+        self.confirm_delete = False
+
+    def diff_adjust(self, i, amount):
+        """LEFT / RIGHT on the custom day / night rows of the difficulty screen."""
+        n = len(DIFFICULTIES)
+        if i == n:
+            self.nudge_custom("day", amount)
+        elif i == n + 1:
+            self.nudge_custom("night", amount)
+        elif i == n + 2:
+            self.nudge_gap(amount)
+
+    def menu_pick(self, i, x=None):
         import net
         items = self.menu_items()
         if not items or self.joiner:
@@ -738,6 +757,7 @@ class UI:
         i = max(0, min(len(items) - 1, i))
         label = items[i]
         if self.menu == "main":
+            self.pending_save = None
             if i == 0:
                 self.net = None
                 self.start()
@@ -749,8 +769,79 @@ class UI:
                     self.finder = net.Finder()
             elif i == 3:
                 self.local_lobby_open()
+            elif i == 4:
+                self.save_list = savegame.list_saves()
+                if not self.save_list:
+                    self.menu_note = "No saved games yet - games save every morning and when you leave."
+                else:
+                    self.menu, self.menu_sel, self.menu_note, self.save_page = "load", 0, "", 0
+            elif i == 5:
+                names = [d[0] for d in DIFFICULTIES]
+                cur = self.chosen_difficulty()[0]
+                self.menu, self.menu_note = "diff", ""
+                self.menu_sel = names.index(cur) if cur in names else len(names)
+            elif i == 6:
+                self.toggle_fullscreen()
             else:
                 arcade.exit()
+        elif self.menu == "diff":
+            n = len(DIFFICULTIES)
+            if i < n:
+                self.set_difficulty(DIFFICULTIES[i][0])
+            elif i in (n, n + 1, n + 2):
+                if x is not None:      # clicked: left half = shorter, right half = longer
+                    self.diff_adjust(i, -5 if x < W / 2 else 5)
+                elif i < n + 2:
+                    self.set_difficulty("Custom")
+            else:
+                self.menu_back()
+        elif self.menu == "load":
+            page = self.save_list[self.save_page * 5:(self.save_page + 1) * 5]
+            if i < len(page):
+                self.picked_save = page[i]
+                self.use_title_difficulty = False
+                self.confirm_delete = False
+                self.menu, self.menu_sel, self.menu_note = "save", 0, savegame.save_label(page[i][1])
+            elif label.startswith("More"):
+                pages = (len(self.save_list) + 4) // 5
+                self.save_page = (self.save_page + 1) % pages
+                self.menu_sel = 0
+            else:
+                self.menu_back()
+        elif self.menu == "save":
+            path, meta = self.picked_save
+            if label.startswith("Delete"):
+                if self.confirm_delete:
+                    savegame.delete_save(path)
+                    self.save_list = savegame.list_saves()
+                    self.save_page = 0
+                    self.confirm_delete = False
+                    self.menu, self.menu_sel = ("load", 0) if self.save_list else ("main", 4)
+                    self.menu_note = "Save deleted."
+                else:
+                    self.confirm_delete = True
+                return
+            if label.startswith("Back"):
+                self.menu_back()
+                return
+            if label.startswith("Difficulty"):
+                self.use_title_difficulty = not self.use_title_difficulty
+                return
+            data = savegame.read_save(path)
+            if data is None:
+                self.menu_note = "That save couldn't be read (it may be from another version)."
+                return
+            data["_path"] = path
+            if self.use_title_difficulty:
+                data["meta"]["difficulty"] = list(self.chosen_difficulty())
+            if i == 0:
+                self.net = None
+                self.start(data)
+            elif i == 1:
+                self.start_host(data)
+            else:
+                self.pending_save = data
+                self.local_lobby_open()
         else:
             games = self.finder.list() if self.finder else []
             if i < len(games):
@@ -764,8 +855,11 @@ class UI:
 
     def menu_rows(self):
         items = self.menu_items()
-        top = 350 if self.menu == "main" else 360
-        return [(it, (W / 2 - 230, W / 2 + 230, top - i * 46 - 18, top - i * 46 + 18)) for i, it in enumerate(items)]
+        many = len(items) > 6
+        top = 400 if many else 360 if self.menu != "main" else 350
+        gap, half = (38, 16) if many else (46, 18)
+        hw = 300 if self.menu in ("diff", "load", "save") else 270 if self.menu == "main" else 230
+        return [(it, (W / 2 - hw, W / 2 + hw, top - i * gap - half, top - i * gap + half)) for i, it in enumerate(items)]
 
     def draw_title(self):
         arcade.draw_lrbt_rectangle_filled(0, W, 0, H, (0, 0, 0, 90))
@@ -782,6 +876,11 @@ class UI:
         if self.menu == "local":
             self.draw_lobby()
             return
+        heads = {"diff": "DIFFICULTY  -  day & night length, and how often bosses come",
+                 "load": "LOAD A SAVED GAME", "save": "RESUME THIS GAME AS..."}
+        if self.menu in heads:
+            top = self.menu_rows()[0][1][3]
+            self.txt("mhead", heads[self.menu], W / 2, top + 16, (255, 230, 170), 16, anchor_x="center", bold=True)
         for i, (label, (l, r, b, t)) in enumerate(self.menu_rows()):
             sel = i == self.menu_sel
             arcade.draw_lrbt_rectangle_filled(l, r, b, t, (255, 214, 140, 60) if sel else (14, 18, 22, 170))
@@ -791,13 +890,23 @@ class UI:
             self.txt(f"menu{self.menu}{i}", label + caret, W / 2, b + 12, (255, 255, 255), 15, anchor_x="center",
                      bold=sel)
         if self.menu_note:
-            self.txt("note", self.menu_note, W / 2, 110, (255, 200, 150), 13, anchor_x="center")
+            self.txt("note", self.menu_note, W / 2, 96, (255, 200, 150), 13, anchor_x="center")
         pad = "Controller ready - D-pad + A to pick" if self.pad.connected else "Plug in a controller any time"
         self.txt("t5", f"Playing as {self.my_name}     |     {pad}", W / 2, 70, (200, 200, 200), 12,
                  anchor_x="center")
         if self.menu == "join":
             self.txt("t6", "Type an IP with the keyboard, ENTER to connect, ESC to go back", W / 2, 46,
                      (160, 160, 160), 11, anchor_x="center")
+        elif self.menu == "diff":
+            lo_d, hi_d = CUSTOM_DAY_LIMITS
+            lo_n, hi_n = CUSTOM_NIGHT_LIMITS
+            lo_g, hi_g = BOSS_GAP_LIMITS
+            self.txt("t6", f"LEFT / RIGHT or click the arrows (SHIFT = 30s).   Day {lo_d}-{hi_d}s,  night {lo_n}-{hi_n}s,  "
+                     f"bosses every {lo_g}-{hi_g} nights.   Saved with each game.", W / 2, 46, (160, 160, 160), 11,
+                     anchor_x="center")
+        elif self.menu in ("load", "save"):
+            self.txt("t6", "Games save every morning, when you leave, and with S on the pause screen.   ESC = back",
+                     W / 2, 46, (160, 160, 160), 11, anchor_x="center")
         else:
             self.txt("t6", "Tame animals  -  craft armor  -  explore the caves  -  a boss rises every 3rd night",
                      W / 2, 46, (160, 160, 160), 11, anchor_x="center")
@@ -807,8 +916,11 @@ class UI:
             arcade.draw_lrbt_rectangle_filled(0, W, 0, H, (0, 0, 0, 180))
             self.txt("ph", "PAUSED" if not self.net else "HELP  (the game keeps going in co-op!)", W / 2, H - 70,
                      (255, 214, 140), 28, anchor_x="center", bold=True)
-            self.txt("ph2", "ESC / MENU to resume       Q / VIEW on this screen: leave to title",
-                     W / 2, 40, (230, 230, 230), 13, anchor_x="center")
+            if self.net == "client":
+                bottom = "ESC / MENU to resume       Q / VIEW: leave to title  (the host saves the game)"
+            else:
+                bottom = "ESC / MENU to resume       S / X: save game       Q / VIEW: save & leave to title"
+            self.txt("ph2", bottom, W / 2, 40, (230, 230, 230), 13, anchor_x="center")
         lines = [
             ("WASD  |  L-stick", "move"), ("Mouse  |  R-stick", "aim"),
             ("Left-click  |  A / RT", "attack, chop, mine, hunt"),
@@ -839,7 +951,7 @@ class UI:
         if me.respawn_t > 0:
             sub = f"Back on your feet in {int(me.respawn_t) + 1}s - at your base, with empty pockets."
         else:
-            left = int((DAWN_START - self.phase) % 1 * DAY_CYCLE_SECONDS)
+            left = int(self.secs_until(DAWN_START))
             sub = f"You died at night - you'll come back at dawn ({left}s)."
             if self.fast_forward:
                 sub = "Everyone is down... the night passes quickly."

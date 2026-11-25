@@ -124,6 +124,9 @@ class LocalCoop:
     def draw_lobby(self):
         W, H = FULL_W, FULL_H
         self.txt("lob_t", "LOCAL CO-OP  -  split screen", W / 2, 430, (255, 230, 170), 20, anchor_x="center", bold=True)
+        if self.pending_save:
+            self.txt("lob_save", f"Resuming saved game - Day {self.pending_save['day']}  (P1, P2... get their own "
+                     "stuff back)", W / 2, 462, (170, 230, 170), 13, anchor_x="center")
         self.txt("lob_s", "Controllers: press A to join.     Keyboard + mouse: press ENTER to join.", W / 2, 400,
                  (210, 210, 210), 12, anchor_x="center")
         cw = 220
@@ -160,7 +163,8 @@ class LocalCoop:
     def start_local(self):
         entries = list(self.lobby)
         self.net = None
-        self.start()
+        self.start(self.pending_save)      # a saved game picked on the title screen, or a new one
+        self.pending_save = None
         self.intro = None             # straight into the action with your friends
         self.state = "playing"
         first = self.me
@@ -198,7 +202,7 @@ class LocalCoop:
                 x, y, w, h, scale = (i % 2) * FULL_W / 2, (1 - i // 2) * FULL_H / 2, FULL_W / 2, FULL_H / 2, 0.75
             vw, vh = int(round(w / scale)), int(round(h / scale))   # whole pixels (lighting textures need ints)
             s.vw, s.vh = vw, vh
-            vp = arcade.LBWH(x, y, w, h)
+            vp = self.fit_rect(x, y, w, h)     # fullscreen scaling (options.py)
             proj = arcade.LRBT(-vw / 2, vw / 2, -vh / 2, vh / 2)
             s.camera = arcade.Camera2D(viewport=vp, projection=proj, position=tuple(s.cam_pos), scissor=vp)
             s.gui = arcade.Camera2D(viewport=vp, projection=proj, position=(vw / 2, vh / 2), scissor=vp)

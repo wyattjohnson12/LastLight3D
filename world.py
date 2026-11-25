@@ -55,6 +55,25 @@ class Structure(arcade.Sprite):
         self.out_t = 0.0
 
 
+class Shot:
+    """Something a survivor fired or threw: an arrow, or a fire pot arcing through the air.
+    It flies in a straight line along the ground (vx, vy) for T seconds; t counts up to T."""
+
+    def __init__(self, kind, x, y, vx, vy, T, dmg=0.0, owner=-1, layer="over"):
+        self.kind, self.x, self.y, self.vx, self.vy = kind, x, y, vx, vy
+        self.t, self.T = 0.0, T
+        self.dmg, self.owner, self.layer = dmg, owner, layer
+        self.done = False
+
+    @property
+    def height(self):
+        """How high above the ground it is: arrows fly flat, pots go up and come down."""
+        if self.kind == "arrow":
+            return 26.0
+        k = min(1.0, self.t / self.T)
+        return 22.0 + 150.0 * 4 * k * (1 - k)
+
+
 class Zombie(arcade.Sprite):
     """Every hostile non-boss: zombies, broodlings, cave crawlers and golems."""
 
@@ -71,6 +90,7 @@ class Zombie(arcade.Sprite):
         self.attack_cd = 0.0
         self.flash = 0.0
         self.trap_cd = 0.0
+        self.snared = 0.0        # held by a bear trap
         self.wobble = random.uniform(0, 10)
         self.radius = {"brute": 26, "golem": 28, "broodling": 12}.get(kind, 18)
         self.detour = 0.0
@@ -131,6 +151,7 @@ class Boss(arcade.Sprite):
         self.attack_cd = 1.0
         self.timers = {"a": 4.0, "b": 2.5, "c": 6.0, "trail": 0.0}
         self.state = "walk"      # walk | windup | charge | blink
+        self.snared = 0.0        # held by a bear trap
         self.state_t = 0.0
         self.charge_dir = (0.0, 0.0)
         self.wobble = 0.0

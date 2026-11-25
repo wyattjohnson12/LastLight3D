@@ -28,10 +28,13 @@ import art_gear
 import intro
 import local_coop
 import net
+import options
+import savegame
 import ui
+import view3d
 from gamepad import Gamepad
 from settings import *
-from world import LAYERS, Animal, Boss, Hazard, Node, Structure, Zombie, build_world, dist
+from world import LAYERS, Animal, Boss, Hazard, Node, Shot, Structure, Zombie, build_world, dist
 
 W, H = SCREEN_WIDTH, SCREEN_HEIGHT
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -99,6 +102,8 @@ class Survivor:
         self.respawn_t = -1.0     # seconds until respawn; -1 = waiting for dawn
         self.kills = 0
         self.tp = 0               # bumps when the host teleports this player
+        self.trap_cd = 0.0        # spike traps prick you too
+        self.trap_warned = -99.0
         self.conn = None
         self.events = []
         self.target = (x, y)
@@ -126,7 +131,7 @@ class Survivor:
 
 
 # =========================================================================== game
-class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
+class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, ui.UI, arcade.Window):
     def __init__(self):
         super().__init__(W, H, SCREEN_TITLE)
         self.background_color = (24, 34, 22)
@@ -142,6 +147,15 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         }.items()}
         self.cfg = load_config()
         self.my_name = (self.cfg.get("name") or getpass.getuser() or "Survivor")[:12].capitalize()
+        self.difficulty = self.chosen_difficulty()     # (name, day seconds, night seconds) - options.py
+        self.save_path = None      # this game's save file (savegame.py)
+        self.away = {}             # saved survivors who aren't playing right now
+        self.pending_save = None   # a save picked on the title screen, waiting for split-screen to start
+        self.save_page = 0
+        self.picked_save = None    # (path, meta) chosen in the "Load saved game" list
+        self.confirm_delete = False
+        self.save_list = []
+        self.use_title_difficulty = False
         self.pad = Gamepad()
         self.use_pad = False
         self.pad_was = None
@@ -164,6 +178,15 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         self.txt_prefix = ""
         self._split = False
         self.setup(random.randrange(1 << 30))
+        self.apply_fit()
+
+    def save_cfg(self):
+        save_config(self.cfg)
+
+    def on_close(self):
+        if self.can_save():
+            self.save_game()      # closing the window never loses your game
+        super().on_close()
 
     # ------------------------------------------------------------------ setup
     def setup(self, seed):
@@ -182,7 +205,11 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         self.structs = {}
         self.zmap, self.amap, self.bmap = {}, {}, {}
         self.hazards = []
+        self.shots = []            # arrows and fire pots in the air
         self.rings = []
+        self.boss_num = 0          # how many bosses have been killed (picks the next one from BOSS_ORDER)
+        self.boss_day = BOSS_EVERY # the night the next boss rises
+        self.boss_hp = None        # a boss that got away keeps its wounds and comes back the next night
         self.storage = {}
         self.nodes_ver = self.struct_ver = self.storage_ver = 0
         self.sent_nodes_ver = self.sent_struct_ver = self.sent_storage_ver = -1
@@ -237,6 +264,7 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
             p.gear_sprites[slot] = spr
             (self.cloak_list if slot == "cloak" else self.gear_list).append(spr)
         p.physics = arcade.PhysicsEngineSimple(p.sprite, walls=[self.over.solid])
+        self.restore_player(p)     # resuming a saved game: they get their own stuff back
         return p
 
     def sync_gear(self, p, shown):
@@ -252,6 +280,7 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
                 spr.angle = p.sprite.angle
 
     def remove_player(self, p):
+        self.remember_player(p)
         p.sprite.remove_from_sprite_lists()
         p.held.remove_from_sprite_lists()
         for spr in getattr(p, "gear_sprites", {}).values():
@@ -387,7 +416,8 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         elif k == "shake" and 0 <= ev[1] < len(self.nodes):
             self.nodes[ev[1]].shake = 0.18
         elif k == "cut":
-            self.start_cutscene(ev[1], ev[2], ev[3], ev[4], local=True)
+            mode, hp = (ev[5], ev[6]) if len(ev) > 6 else ("intro", "")
+            self.start_cutscene(ev[1], ev[2], ev[3], ev[4], local=True, mode=mode, hp=hp)
         elif k == "cutend":
             self.cut = None
 
@@ -413,7 +443,10 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
 
     @property
     def boss_night(self):
-        return self.day % BOSS_EVERY == 0
+        return self.day >= self.boss_day
+
+    def next_boss(self):
+        return BOSSES[BOSS_ORDER[self.boss_num % len(BOSS_ORDER)]]
 
     @property
     def view_layer(self):
@@ -720,7 +753,7 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         ok = dist((x, y), p.pos) < 190 and 40 < x < L.size - 40 and 40 < y < L.size - 40
         if ok:
             ok = not arcade.check_for_collision_with_lists(ghost, [L.solid, L.huts, L.zombies, L.traps, L.exits])
-            if ok and item not in ("hut", "spike_trap"):
+            if ok and item != "hut" and item not in TRAP_KINDS:
                 ok = not arcade.check_for_collision_with_list(ghost, self.player_list)
         return item, ghost, ok
 
@@ -752,7 +785,7 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         self.structs[sid] = s
         if kind == "hut":
             L.huts.append(s)
-        elif kind == "spike_trap":
+        elif kind in TRAP_KINDS:
             L.traps.append(s)
         else:
             L.builds.append(s)
@@ -790,8 +823,11 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
             self.remove_structure(s)
 
     def set_fire(self, s, lit):
+        """Fires: lit or put out. Bear traps use the same switch for armed / sprung."""
         if s.lit != lit:
             s.lit = lit
+            if s.kind == "bear_trap":
+                s.color = (255, 255, 255) if lit else (120, 120, 120)
             for e in s.extras:
                 e.visible = lit
             self.struct_ver += 1
@@ -871,6 +907,9 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         self.fx_layer = p.layer
         px, py = p.pos
         fx, fy = math.cos(p.face), math.sin(p.face)
+        if w.get("ranged"):
+            self.shoot(p, w)
+            return
         allround = bool(w.get("quake"))
 
         def in_front(pos, reach, cone=0.45):
@@ -920,6 +959,82 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         if "honey" in got:
             self.anger_bees(n.position, p)
 
+    # ------------------------------------------------------------------ arrows & fire pots
+    def shoot(self, p, w):
+        if not self.take(p, "arrows"):
+            p.attack_cd = 0.6
+            self.say("Out of arrows! Craft more in the Supplies tab (wood, stone, fiber).", 2, to=p)
+            self.play("error", 0.2, to=p)
+            return
+        fx, fy = math.cos(p.face), math.sin(p.face)
+        x, y = p.pos[0] + fx * 26, p.pos[1] + fy * 26
+        self.shots.append(Shot("arrow", x, y, fx * ARROW_SPEED, fy * ARROW_SPEED, w["reach"] / ARROW_SPEED,
+                               w["damage"], p.id, p.layer))
+        self.play("laser", 0.12, at=p.pos, layer=p.layer)
+
+    def throw(self, p, item, tx, ty):
+        px, py = p.pos
+        dx, dy = tx - px, ty - py
+        d = math.hypot(dx, dy)
+        if d > FIRE_POT_RANGE:
+            dx, dy = dx / d * FIRE_POT_RANGE, dy / d * FIRE_POT_RANGE
+        if not self.take(p, item):
+            return
+        T = FIRE_POT_FLIGHT
+        self.shots.append(Shot("pot", px, py, dx / T, dy / T, T, ITEMS[item]["damage"], p.id, p.layer))
+        p.swing = 0.2
+        p.swings += 1
+        self.play("place", 0.25, at=p.pos, layer=p.layer)
+
+    def _update_shots(self, dt):
+        for s in self.shots:
+            s.x += s.vx * dt
+            s.y += s.vy * dt
+            s.t += dt
+            L = self.layers[s.layer]
+            by = self.players.get(s.owner)
+            self.fx_layer = s.layer
+            if s.kind == "arrow":
+                if s.layer == "cave" and arcade.get_sprites_at_point((s.x, s.y), L.walls):
+                    s.done = True
+                    continue
+                sp = math.hypot(s.vx, s.vy) or 1
+                hit = next((e for e in list(L.zombies) + list(L.bosses)
+                            if dist((s.x, s.y), e.position) < e.radius + 8), None)
+                if hit is not None:
+                    self.hit_enemy(hit, s.dmg, by, s.vx / sp, s.vy / sp)
+                    s.done = True
+                    continue
+                beast = next((a for a in L.animals if not a.pet and dist((s.x, s.y), a.position) < 22), None)
+                if beast is not None:
+                    self.hit_animal(beast, s.dmg, by, s.vx / sp, s.vy / sp)
+                    s.done = True
+                elif s.t >= s.T:
+                    s.done = True
+            elif s.t >= s.T:
+                s.done = True
+                self._pot_burst(s, by)
+        self.shots = [s for s in self.shots if not s.done]
+
+    def _pot_burst(self, s, by):
+        """A fire pot lands: flames hurt every enemy close by (never players)."""
+        L = self.layers[s.layer]
+        r = FIRE_POT_RADIUS
+        for z in list(L.zombies):
+            if dist(z.position, (s.x, s.y)) < r + z.radius * 0.5:
+                z.burn = max(z.burn, 3.0)
+                self.hit_enemy(z, s.dmg, by)
+        for b in list(L.bosses):
+            if dist(b.position, (s.x, s.y)) < r + b.radius:
+                self.hit_enemy(b, s.dmg, by)
+        for a in list(L.animals):
+            if not a.pet and dist(a.position, (s.x, s.y)) < r:
+                self.hit_animal(a, s.dmg, by)
+        self.burst(s.x, s.y, (255, 140, 40), 30, 220, 5, 0.8, layer=s.layer)
+        self.ring(s.x, s.y, 10, r, 0.4, (255, 160, 60), layer=s.layer)
+        self.play("boom", 0.35, at=(s.x, s.y), layer=s.layer)
+        self.shake(5, 0.25, s.layer)
+
     def anger_bees(self, pos, p):
         """Raiding a hive makes the wild bees around it come after you (tame bees don't mind)."""
         angry = [a for a in self.over.animals
@@ -930,6 +1045,8 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
             self.say("BZZZ! The bees are angry - run, or swat them!", 2.5, to=p)
 
     def hit_enemy(self, z, dmg, by=None, fx=0.0, fy=0.0, w=None):
+        if isinstance(z, Boss) and z.state == "flee":
+            return                         # it's escaping into the dawn - no cheap last hits
         z.hp -= dmg
         z.flash = 0.12
         L = self.L(z)
@@ -1061,7 +1178,7 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
 
     # ------------------------------------------------------------------ bosses
     def spawn_boss(self):
-        n = self.day // BOSS_EVERY - 1
+        n = self.boss_num
         kind = BOSS_ORDER[n % len(BOSS_ORDER)]
         cycle = n // len(BOSS_ORDER)
         alive = self.alive_players("over")
@@ -1081,16 +1198,62 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         self.next_bid += 1
         self.over.bosses.append(b)
         self.bmap[b.bid] = b
-        self.start_cutscene(kind, b.center_x, b.center_y, self.day)
+        if self.boss_hp is not None:      # it got away last night - same boss, same wounds, no intro
+            b.hp = min(b.max_hp, self.boss_hp)
+            self.play("roar", 0.4)
+            self.shake(8, 0.6)
+            hurt = f"still wounded ({int(b.hp)}/{int(b.max_hp)})" if b.hp < b.max_hp else "back for another try"
+            self.say(f"{b.info['name']} RETURNS - {hurt}. Finish it!", 6)
+        else:
+            self.start_cutscene(kind, b.center_x, b.center_y, self.day)
         return b
 
-    def start_cutscene(self, kind, x, y, night, local=False):
-        self.cut = {"kind": kind, "x": x, "y": y, "t": 0.0, "dur": 9.0, "night": night}
+    def start_retreat(self, b):
+        """Dawn: the boss turns and runs, fading into the trees, while a short cutscene says it'll be back."""
+        alive = self.alive_players("over")
+        if alive:
+            p = min(alive, key=lambda q: dist(q.pos, b.position))
+            a = math.atan2(b.center_y - p.pos[1], b.center_x - p.pos[0])
+        else:
+            a = random.uniform(0, math.tau)
+        b.state, b.state_t, b.snared = "flee", 0.0, 0.0
+        b.charge_dir = (math.cos(a), math.sin(a))
+        self.play("roar", 0.35, at=b.position, layer="over")
+        if b.hp < b.max_hp:
+            line = f"It keeps its wounds:  {int(b.hp)}/{int(b.max_hp)} health.  Be ready."
+        else:
+            line = "It didn't take a scratch. Try a bow, fire pots and bear traps."
+        self.start_cutscene(b.kind, b.center_x, b.center_y, self.day, mode="retreat", hp=line)
+
+    def _update_fleeing(self, dt):
+        """Bosses running away at dawn. Runs even during the cutscene, so you watch it go."""
+        for b in list(self.over.bosses):
+            if b.state != "flee":
+                continue
+            b.state_t += dt
+            dx, dy = b.charge_dir
+            speed = b.speed * 2.4 * min(1.0, b.state_t / 0.6)     # turns, then bolts
+            b.center_x = max(40, min(WORLD_SIZE - 40, b.center_x + dx * speed * dt))
+            b.center_y = max(40, min(WORLD_SIZE - 40, b.center_y + dy * speed * dt))
+            b.heading = math.atan2(dy, dx)
+            b.wobble += dt * 8
+            b.angle = -math.degrees(b.heading) + math.sin(b.wobble) * 6
+            b.alpha = int(255 * max(0.0, 1 - max(0.0, b.state_t - 1.2) / 2.6))
+            if random.random() < 0.35:
+                self.fx_layer = "over"
+                self.burst(b.center_x, b.center_y, (70, 66, 64), 2, 60, 5, 0.9)
+            if b.state_t >= 4.0:
+                self.bmap.pop(b.bid, None)
+                b.remove_from_sprite_lists()
+
+    def start_cutscene(self, kind, x, y, night, local=False, mode="intro", hp=""):
+        self.cut = {"kind": kind, "x": x, "y": y, "t": 0.0, "dur": 9.0 if mode == "intro" else 5.5, "night": night,
+                    "mode": mode, "hp": hp}
         self.ui_open = None
         self.mouse_down = False
         self._play("roar", 0.25, speed=0.6)
         if not local:
-            self._emit(["cut", kind, r1(x), r1(y), night], None)
+            self._emit(["cut", kind, r1(x), r1(y), night, mode, hp], None)
 
     def end_cutscene(self):
         if self.cut:
@@ -1112,7 +1275,12 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
                     self.give(p, k, v)
         if by:
             by.kills += 1
-        self.say(f"{b.info['name']} IS DEFEATED!  Everyone alive gets: {drops}", 8)
+        self.boss_num += 1
+        self.boss_day = self.day + self.boss_gap
+        self.boss_hp = None
+        gap = f"{self.boss_gap} night{'s' if self.boss_gap > 1 else ''}"
+        self.say(f"{b.info['name']} IS DEFEATED!  Everyone alive gets: {drops}.   "
+                 f"Next: {self.next_boss()['name']} in {gap}.", 9)
         self.bmap.pop(b.bid, None)
         b.remove_from_sprite_lists()
         self.hazards = [h for h in self.hazards if h.owner is not b]
@@ -1157,6 +1325,8 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
             self.cut["t"] += dt
             if self.cut["t"] >= self.cut["dur"]:
                 self.end_cutscene()
+        if self.sim and self.state == "playing":
+            self._update_fleeing(dt)
         if self.local:
             self.local_move(dt)
         else:
@@ -1174,10 +1344,11 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
                 self._update_animals(dt)
                 self._update_bosses(dt)
                 self._update_hazards(dt)
+                self._update_shots(dt)
                 self._update_world(dt)
         else:
             if not self.cut:
-                self.clock += dt * (8 if self.fast_forward else 1)
+                self.clock += dt * self.clock_rate() * (8 if self.fast_forward else 1)
             self._client_visuals(dt)
         self._update_visuals(dt)
         if self.local:
@@ -1201,8 +1372,7 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         me = self.me
         if self.use_pad:
             return (me.sprite.center_x + math.cos(me.face) * 80, me.sprite.center_y + math.sin(me.face) * 80)
-        v = self.camera.unproject(self.mouse_screen)
-        return (v[0], v[1])
+        return self.mouse_ground()   # where the mouse ray hits the 3D ground
 
     def read_local_input(self):
         me = self.me
@@ -1256,10 +1426,12 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         before = self.phase
         everyone_down = bool(self.players) and not self.alive_players()
         self.fast_forward = everyone_down and self.is_night
-        self.clock += dt * (8 if self.fast_forward else 1)
+        self.clock += dt * self.clock_rate() * (8 if self.fast_forward else 1)
         p = self.phase
         if before < DUSK_START <= p:
-            if self.boss_night:
+            if self.boss_night and self.boss_hp is not None:
+                self.say(f"{self.next_boss()['name']} is coming back tonight. Finish it!", 6)
+            elif self.boss_night:
                 self.say("The ground trembles... something BIG is coming tonight. Get ready!", 6)
             else:
                 self.say("Dusk... they're coming. Build walls, light a fire, or get to a hut.", 5)
@@ -1268,11 +1440,12 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         if before < DAWN_START <= p:
             self.say("Dawn breaks - the dead burn in the sunlight.", 4)
             for b in list(self.over.bosses):
-                self.say(f"{b.info['name']} retreats into the dark... you survived it.", 6)
-                self.fx_layer = "over"
-                self.burst(b.center_x, b.center_y, (60, 60, 60), 30, 160, 6, 1.2)
-                self.bmap.pop(b.bid, None)
-                b.remove_from_sprite_lists()
+                if b.state == "flee":
+                    continue
+                self.boss_hp = b.hp            # it remembers every hit
+                self.boss_day = self.day + 1   # ...and comes back tomorrow night
+                self.say(f"{b.info['name']} retreats ({int(b.hp)}/{int(b.max_hp)})... it will be back tomorrow night.", 7)
+                self.start_retreat(b)
             self.hazards = []
             self.cold_mult = 1.0
             for s in self.players.values():
@@ -1280,8 +1453,12 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
                     self.respawn(s)
         if p < before:
             self.day += 1
-            self.say(f"Day {self.day}. You survived the night." +
-                     ("  Tonight a BOSS rises." if self.boss_night else ""), 5)
+            tonight = ""
+            if self.boss_night:
+                tonight = (f"  Tonight {self.next_boss()['name']} returns." if self.boss_hp is not None
+                           else "  Tonight a BOSS rises.")
+            self.say(f"Day {self.day}. You survived the night." + tonight, 5)
+            self.save_game()     # autosave every morning
         n_over = len(self.alive_players("over"))
         if self.is_night and n_over:
             self.over.spawn_timer -= dt
@@ -1348,6 +1525,17 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         if p.health <= 0:
             self.down_player(p)
             return
+        p.trap_cd -= dt
+        if p.trap_cd <= 0:
+            for t in arcade.check_for_collision_with_list(p.sprite, self.layers[p.layer].traps):
+                if t.kind == "spike_trap":
+                    self.hurt_player(p, SPIKE_PLAYER_DAMAGE)
+                    self.damage_structure(t, 1)
+                    p.trap_cd = 0.8
+                    if self.time_alive - p.trap_warned > 12:
+                        p.trap_warned = self.time_alive
+                        self.say("OUCH! Spike traps hurt you too - get off it! Put traps in the zombies' path.", 3, to=p)
+                    break
         moving = (p.move[0] or p.move[1]) and not p.resting
         L = self.layers[p.layer]
         p.in_hut = None
@@ -1476,7 +1664,7 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
                 vx, vy = vx * 0.3 + z.detour_dir[0], vy * 0.3 + z.detour_dir[1]
                 n = math.hypot(vx, vy) or 1
                 vx, vy = vx / n, vy / n
-            step = z.speed * dt * (0.5 if z.chill > 0 else 1)
+            step = z.speed * dt * (0.5 if z.chill > 0 else 1) * (0 if z.snared > 0 else 1)
             blocked_by, moved = self.step_body(z, vx * step, vy * step, blockers)
             nature = [b for b in blocked_by if not isinstance(b, Structure)]
             if nature and moved < step * 0.35 and z.detour <= 0:
@@ -1486,6 +1674,7 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
 
             z.attack_cd -= dt
             z.trap_cd -= dt
+            z.snared = max(0, z.snared - dt)
             z.chill = max(0, z.chill - dt)
             if z.attack_cd <= 0:
                 built = [b for b in blocked_by if isinstance(b, Structure)]
@@ -1504,11 +1693,21 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
                         self.hit_animal(pet, 0, None)
             if z.trap_cd <= 0:
                 for t in arcade.check_for_collision_with_list(z, L.traps):
-                    z.hp -= 3
-                    z.flash = 0.12
+                    if t.kind == "bear_trap":
+                        if not t.lit:          # sprung - still re-arming
+                            continue
+                        z.snared = BEAR_TRAP_HOLD
+                        self.set_fire(t, False)
+                        t.out_t = BEAR_TRAP_REARM
+                        self.burst(z.center_x, z.center_y, (190, 190, 200), 8, 90, layer=z.layer)
+                        self.play("hit", 0.3, at=t.position, layer=t.layer)
+                        self.damage_structure(t, 15)
+                    else:
+                        z.hp -= SPIKE_ZOMBIE_DAMAGE
+                        z.flash = 0.12
+                        self.burst(z.center_x, z.center_y, (110, 30, 30), 5, 100, layer=z.layer)
+                        self.damage_structure(t, SPIKE_WEAR)
                     z.trap_cd = 0.6
-                    self.damage_structure(t, 2)
-                    self.burst(z.center_x, z.center_y, (110, 30, 30), 5, 100)
                     break
             if z.burn > 0:
                 z.burn -= dt
@@ -1763,6 +1962,8 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         self.cold_mult = 1.0
         alive = self.alive_players("over")
         for b in list(L.bosses):
+            if b.state == "flee":          # running away at dawn (_update_fleeing)
+                continue
             b.flash = max(0, b.flash - dt)
             b.attack_cd -= dt
             b.wobble += dt * 4
@@ -1818,6 +2019,24 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
                     self.play("laser", 0.4, at=b.position, layer="over")
             else:
                 self._boss_abilities(b, tgt, alive, d)
+            b.snared = max(0, b.snared - dt)
+            for t in arcade.check_for_collision_with_list(b, L.traps):
+                if t.kind == "bear_trap" and t.lit and b.state != "blink":
+                    b.snared = BEAR_TRAP_BOSS_HOLD
+                    if b.state == "charge":
+                        b.state = "walk"
+                    self.set_fire(t, False)
+                    t.out_t = BEAR_TRAP_REARM
+                    self.play("hit", 0.4, at=t.position, layer="over")
+                    self.say(f"The Bear Trap caught {b.info['name']}!", 2)
+                    self.damage_structure(t, 30)
+                elif t.kind == "spike_trap":
+                    self.damage_structure(t, 999)          # crushed flat...
+                    self.hit_enemy(b, SPIKE_BOSS_DAMAGE)    # ...but it hurt
+            if b not in L.bosses:                           # the spikes finished it off
+                continue
+            if b.snared > 0:
+                speed = 0
             if speed and b.state != "blink":
                 step = speed * dt
                 if b.kind == "wraith":
@@ -1864,7 +2083,7 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
                 T["b"] = 4.5
                 for p in sorted(alive, key=lambda p: dist(p.pos, b.position))[:2]:
                     if dist(p.pos, b.position) < 650:
-                        self.hazards.append(Hazard("boulder", p.pos[0], p.pos[1], 62, tele=1.15, dmg=20, owner=b))
+                        self.hazards.append(Hazard("boulder", p.pos[0], p.pos[1], 62, tele=1.15, dmg=16, owner=b))
         elif kind == "brood":
             if T["a"] <= 0:
                 T["a"] = 11.0
@@ -2109,14 +2328,14 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         self.message_t -= dt
 
     # ------------------------------------------------------------------ networking: host
-    def start_host(self):
+    def start_host(self, save=None):
         try:
             self.server = net.Server(self.my_name)
         except OSError as e:
             self.menu_note = f"Couldn't host: {e}"
             return False
         self.net = "host"
-        self.start()
+        self.start(save)
         self.say(f"Hosting!  Friends on your Wi-Fi: Join -> pick '{self.my_name}'   (IP {net.lan_ip()})", 8)
         return True
 
@@ -2134,6 +2353,7 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
                     p = self.add_player(name, conn=c)
                     if self.me:
                         self.set_layer(p, self.me.layer, (self.view_pos()[0] + 40, self.view_pos()[1]))
+                        p.tp += 1      # tell their game where they are (and on which layer)
                     c.send({"t": "world", "seed": self.seed, "pid": p.id})
                     self.sent_nodes_ver = self.sent_struct_ver = self.sent_storage_ver = -1
                     self.say(f"{name} joined the game!", 3)
@@ -2197,6 +2417,11 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
                 self.tame(p, int(kw.get("aid", -1)))
             elif a == "pets":
                 self.command_pets(p)
+            elif a == "throw":
+                p.selected = max(0, min(HOTBAR_SLOTS - 1, int(kw.get("s", p.selected))))
+                it = p.hotbar[p.selected]
+                if it and ITEMS[it]["kind"] == "throw":
+                    self.throw(p, it, float(kw["x"]), float(kw["y"]))
         except (KeyError, ValueError, TypeError):
             pass
 
@@ -2204,7 +2429,10 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         li = LAYERS.index
         common = {
             "t": "snap", "c": r1(self.clock), "d": self.day, "k": self.kills, "g": self.state,
-            "ff": int(self.fast_forward), "cm": self.cold_mult,
+            "ff": int(self.fast_forward), "cm": self.cold_mult, "dn": list(self.difficulty),
+            "bd": [self.boss_day, self.boss_num, int(self.boss_hp is not None)],
+            "sh": [[s.kind, r1(s.x), r1(s.y), r1(s.vx), r1(s.vy), round(s.t, 2), round(s.T, 2), li(s.layer)]
+                   for s in self.shots],
             "p": [[p.id, p.name, r1(p.sprite.center_x), r1(p.sprite.center_y), round(p.face, 2), int(p.health),
                    int(p.alive), p.in_hut.sid if p.in_hut else 0, p.hotbar[p.selected] or "", p.swings, p.kills,
                    li(p.layer)] for p in self.players.values()],
@@ -2295,6 +2523,16 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         self.day, self.kills = m["d"], m["k"]
         self.fast_forward = bool(m.get("ff"))
         self.cold_mult = m.get("cm", 1.0)
+        if "dn" in m:
+            self.difficulty = tuple(m["dn"])
+        if "bd" in m:
+            self.boss_day, self.boss_num = m["bd"][0], m["bd"][1]
+            self.boss_hp = 1 if m["bd"][2] else None
+        self.shots = []
+        for kind, x, y, vx, vy, t, T, ly in m.get("sh", []):
+            s = Shot(kind, x, y, vx, vy, T, layer=LAYERS[ly])
+            s.t = t
+            self.shots.append(s)
         if "n" in m:
             for n, ch in zip(self.nodes, m["n"]):
                 self.set_node_state(n, CODE_NODE.get(ch, "full"))
@@ -2414,6 +2652,10 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         return b
 
     def _client_visuals(self, dt):
+        for s in self.shots:           # keep arrows & pots moving between snapshots
+            s.x += s.vx * dt
+            s.y += s.vy * dt
+            s.t = min(s.T, s.t + dt)
         k = min(1.0, dt * 14)
         for L in self.layers.values():
             for z in L.zombies:
@@ -2468,6 +2710,8 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         self.do_action(self.me, a, kw)
 
     def leave_game(self, note=""):
+        if self.can_save():
+            self.save_game()      # autosave on the way out
         self.local_end()
         if self.conn:
             self.conn.close()
@@ -2481,13 +2725,30 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         self.setup(random.randrange(1 << 30))
 
     # ------------------------------------------------------------------ starting
-    def start(self):
-        self.setup(random.randrange(1 << 30))
+    def start(self, save=None):
+        """Start a game: a brand new one, or (with `save`) a saved one picked on the title screen."""
+        self.setup(save["seed"] if save else random.randrange(1 << 30))
+        self.away = {}
+        self.save_path = None
+        if save:
+            self.load_world(save)          # savegame.py
+            self.save_path = save.get("_path")
+        else:
+            self.difficulty = self.chosen_difficulty()
+            self.boss_day = self.boss_gap
         self.me = self.add_player(self.my_name)
         self.host_ip = net.lan_ip()
+        if save:
+            self.intro = None
+            self.state = "playing"
+            self.say(f"Welcome back - Day {self.day}.  ({self.difficulty[0]}: {self.difficulty[1]}s day, "
+                     f"{self.difficulty[2]}s night, a boss every {self.boss_gap} nights)", 5)
+            if self.net == "host":
+                self.say(f"Hosting your saved game! Friends: Join -> pick '{self.my_name}'. "
+                         "Use the same name as last time to get your stuff back.", 8)
         # Solo: state "intro" pauses the world while the cutscene plays.
         # Host: the world must keep running for joiners, so the cutscene is an overlay and state stays "playing".
-        if self.net is None:
+        elif self.net is None:
             self.intro = intro.Intro(self.my_name)
             self.state = "intro"
         else:
@@ -2515,6 +2776,9 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
 
     # ------------------------------------------------------------------ input
     def on_key_press(self, key, modifiers):
+        if key == arcade.key.F11 or (key == arcade.key.F and modifiers & (arcade.key.MOD_COMMAND | arcade.key.MOD_CTRL)):
+            self.toggle_fullscreen()      # F11, or Cmd+F / Ctrl+F
+            return
         self.keys.add(key)
         if self.state == "title" and self.menu == "local":
             self.lobby_key(key)
@@ -2536,6 +2800,9 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
             return
         if self.paused and key == arcade.key.Q:
             self.leave_game()
+            return
+        if self.paused and key == arcade.key.S:
+            self.save_game(manual=True)
             return
         if key == arcade.key.ESCAPE:
             if self.ui_open:
@@ -2581,6 +2848,13 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
 
     def title_key(self, key, modifiers):
         items = self.menu_items()
+        if self.menu == "diff" and key in (arcade.key.LEFT, arcade.key.RIGHT, arcade.key.A, arcade.key.D):
+            step = 30 if modifiers & arcade.key.MOD_SHIFT else 5
+            self.diff_adjust(self.menu_sel, step if key in (arcade.key.RIGHT, arcade.key.D) else -step)
+            return
+        if key == arcade.key.ESCAPE and self.menu in ("diff", "load", "save"):
+            self.menu_back()
+            return
         if key in (arcade.key.UP, arcade.key.W) and not (self.menu == "join" and key == arcade.key.W):
             self.menu_sel = (self.menu_sel - 1) % len(items)
         elif key in (arcade.key.DOWN, arcade.key.S) and not (self.menu == "join" and key == arcade.key.S):
@@ -2614,6 +2888,7 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         self.keys.discard(key)
 
     def on_mouse_motion(self, x, y, dx, dy):
+        x, y = self.to_layout(x, y)      # fullscreen: undo the scaling (options.py)
         self.mouse_screen = (x, y)
         if abs(dx) + abs(dy) > 2:
             self.use_pad = False
@@ -2623,9 +2898,10 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
                     self.menu_sel = i
 
     def on_mouse_drag(self, x, y, dx, dy, buttons, modifiers):
-        self.mouse_screen = (x, y)
+        self.mouse_screen = self.to_layout(x, y)
 
     def on_mouse_press(self, x, y, button, modifiers):
+        x, y = self.to_layout(x, y)
         self.mouse_screen = (x, y)
         if self.state == "title" and self.menu == "local":
             self.lobby_click(x, y)
@@ -2641,7 +2917,7 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
         if self.state == "title":
             for i, (_, (l, r, b, t)) in enumerate(self.menu_rows()):
                 if l < x < r and b < y < t:
-                    self.menu_pick(i)
+                    self.menu_pick(i, x)
             return
         if self.cut:
             self.skip_cutscene()
@@ -2688,6 +2964,13 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
             self.action("place", x=tx, y=ty, s=self.me.selected)
         elif kind == "food":
             self.action("use", item=sel)
+        elif kind == "throw":
+            me = self.me
+            if self.use_pad:      # controller: throw it a good way in front of you
+                tx, ty = me.pos[0] + math.cos(me.face) * 260, me.pos[1] + math.sin(me.face) * 260
+            else:
+                tx, ty = self.aim_world()
+            self.action("throw", x=tx, y=ty, s=me.selected)
 
     def on_mouse_release(self, x, y, button, modifiers):
         if button == arcade.MOUSE_BUTTON_LEFT:
@@ -2739,6 +3022,20 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
                 self._stick_t = 0.25
             elif abs(ly) < 0.3:
                 self._stick_t = 0
+            if self.menu == "diff":
+                lx = pad.left[0]
+                self._stick_x = getattr(self, "_stick_x", 0) - dt
+                if "dpright" in pr or (lx > 0.6 and self._stick_x <= 0):
+                    self.diff_adjust(self.menu_sel, 5)
+                    self._stick_x = 0.2
+                elif "dpleft" in pr or (lx < -0.6 and self._stick_x <= 0):
+                    self.diff_adjust(self.menu_sel, -5)
+                    self._stick_x = 0.2
+                elif abs(lx) < 0.3:
+                    self._stick_x = 0
+            if "b" in pr and self.menu in ("diff", "load", "save"):
+                self.menu_back()
+                return
             if "a" in pr or "start" in pr:
                 self.menu_pick(self.menu_sel)
             return
@@ -2751,6 +3048,8 @@ class LastLight(local_coop.LocalCoop, ui.UI, arcade.Window):
                 self.paused = False
             elif "back" in pr:
                 self.leave_game()
+            elif "x" in pr:
+                self.save_game(manual=True)
             return
         if "start" in pr:
             self.paused = True
@@ -2814,6 +3113,8 @@ def main():
         print("Saved every texture to the art_export/ folder.")
         return
     game = LastLight()
+    if game.cfg.get("fullscreen"):
+        game.set_fullscreen(True)
     if "--name" in args and args.index("--name") + 1 < len(args):
         game.my_name = args[args.index("--name") + 1][:12]
         game.cfg["name"] = game.my_name

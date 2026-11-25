@@ -5,3 +5,5 @@ __pycache__/
 lastlight_config.json
 # made by: python3 main.py --export-art
 art_export/
+# saved games (made by the game)
+saves/
