@@ -526,6 +526,7 @@ class View3D:
                     arcade.draw_circle_filled(s.center_x, s.center_y, 60, (255, 240, 200, 40))
             self.gui.use()
 
+        self.draw_weather_3d(vl)  # weather.py: rain / snow / fog and the season's tint
         self.draw_repair_bars(L)  # repair.py: holding the hammer shows how hurt buildings are
         self.draw_shots(vl)      # after the darkness: a burning fire pot shows up at night
 

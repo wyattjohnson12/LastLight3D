@@ -99,6 +99,20 @@ Craft a **Repair Hammer** (3 wood, 2 stone) and hit a damaged wall, fire, hut or
 back to full health, and costs part of its recipe: the more damage, the more it costs (a stone wall at half
 health = 2 stone + 1 wood). Holding the hammer shows health bars over damaged buildings.
 
+## Seasons and weather
+
+The year goes **spring, summer, autumn, winter**, 4 days each (change `SEASON_DAYS` in `settings.py`).
+The season and the weather are shown under the day clock.
+- **Rain** can put out campfires out in the open. They catch again once they dry. Fires **next to a
+  hut** stay lit, and braziers only go out in storms. Standing in the rain keeps your thirst up a bit.
+- **Storms** bring heavier rain, lightning and a chill. **Fog** makes it hard to see. **Snow** (winter
+  only) is cold whenever you're away from a fire.
+- **Winter nights** are freezing: away from a fire or a hut you lose warmth and energy much faster.
+- Spring brings more animals and winter fewer. Berry bushes regrow slowly in winter. Summer days make
+  you thirsty.
+
+All the numbers are in `settings.py`, and the code is in `weather.py`.
+
 ## Useful gear for boss fights
 
 - **Hunting Bow** (workbench) + **Arrows** - shoot from a safe distance.

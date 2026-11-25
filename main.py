@@ -35,6 +35,7 @@ import repair
 import savegame
 import ui
 import view3d
+import weather
 from gamepad import Gamepad
 from settings import *
 from world import LAYERS, Animal, Boss, Hazard, Node, Shot, Structure, Zombie, build_world, dist
@@ -135,7 +136,7 @@ class Survivor:
 
 # =========================================================================== game
 class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
-                progress.Progress, ui.UI, arcade.Window):
+                progress.Progress, weather.Weather, ui.UI, arcade.Window):
     def __init__(self):
         super().__init__(W, H, SCREEN_TITLE)
         self.background_color = (24, 34, 22)
@@ -248,6 +249,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         self.cold_mult = 1.0
         self.fast_forward = False
         self.animal_t = 0.0
+        self.weather_setup()       # weather.py: seasons & weather
 
     def add_player(self, name, conn=None, pid=None):
         if pid is None:
@@ -1371,6 +1373,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             if not self.cut:
                 self.clock += dt * self.clock_rate() * (8 if self.fast_forward else 1)
             self._client_visuals(dt)
+        self.weather_tick(dt)      # weather.py
         self._update_visuals(dt)
         if self.local:
             self.local_cameras(dt)
@@ -1590,6 +1593,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             cold = CAVE_COLD_PER_SEC
         else:
             cold = COLD_PER_SEC * self.darkness * self.cold_mult
+        cold += self.weather_survivor(p, dt)   # weather.py: winter nights, snow, rain
         cold = max(0.0, cold - p.gear("warmth") * WARMTH_PER_GEAR_POINT)
         warm = 0.0
         if self.near_fire(p.pos, p.layer):
@@ -2451,7 +2455,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         li = LAYERS.index
         common = {
             "t": "snap", "c": r1(self.clock), "d": self.day, "k": self.kills, "g": self.state,
-            "ff": int(self.fast_forward), "cm": self.cold_mult, "dn": list(self.difficulty),
+            "ff": int(self.fast_forward), "cm": self.cold_mult, "dn": list(self.difficulty), "wx": self.weather_net(),
             "bd": [self.boss_day, self.boss_num, int(self.boss_hp is not None)],
             "sh": [[s.kind, r1(s.x), r1(s.y), r1(s.vx), r1(s.vy), round(s.t, 2), round(s.T, 2), li(s.layer)]
                    for s in self.shots],
@@ -2546,6 +2550,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         self.day, self.kills = m["d"], m["k"]
         self.fast_forward = bool(m.get("ff"))
         self.cold_mult = m.get("cm", 1.0)
+        self.weather_apply(m.get("wx"))
         if "dn" in m:
             self.difficulty = tuple(m["dn"])
         if "bd" in m:

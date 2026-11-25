@@ -182,7 +182,7 @@ class SaveGame:
             "meta": {"saved_at": time.time(), "day": self.day, "mode": mode, "names": names,
                      "difficulty": list(self.difficulty)},
             "seed": self.seed, "clock": self.clock, "day": self.day, "kills": self.kills,
-            "time_alive": self.time_alive, "cold_mult": self.cold_mult,
+            "time_alive": self.time_alive, "cold_mult": self.cold_mult, "weather": self.weather_save(),
             "boss": [self.boss_num, self.boss_day, self.boss_hp],
             "nodes": [[n.idx, NODE_CODE[n.state], round(n.timer, 1), n.hp] for n in self.nodes
                       if n.state != "full" or n.hp != NODES[n.kind]["hp"]],
@@ -206,6 +206,7 @@ class SaveGame:
         self.day, self.kills = int(data["day"]), int(data["kills"])
         self.time_alive = float(data.get("time_alive", 0))
         self.cold_mult = float(data.get("cold_mult", 1.0))
+        self.weather_load(data.get("weather"))     # weather.py (older saves: clear skies)
         old = [max(0, (self.day - 1) // BOSS_EVERY), self.day + (-self.day) % BOSS_EVERY, None]  # saves from before
         self.boss_num, self.boss_day, self.boss_hp = data.get("boss", old)
         default = next(d for d in DIFFICULTIES if d[0] == DEFAULT_DIFFICULTY)

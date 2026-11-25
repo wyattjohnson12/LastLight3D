@@ -59,6 +59,31 @@ CUSTOM_DAY_LIMITS = (30, 900)      # shortest / longest custom day, in seconds
 CUSTOM_NIGHT_LIMITS = (20, 600)    # shortest / longest custom night
 BOSS_GAP_LIMITS = (1, 10)          # "nights between bosses" setting (the default is BOSS_EVERY)
 
+# ----------------------------------------------------------------- seasons & weather (see weather.py)
+SEASONS = ["spring", "summer", "autumn", "winter"]
+SEASON_DAYS = 4            # days in each season (day 1-4 spring, 5-8 summer, ...)
+# chance of each weather when the weather changes, per season
+SEASON_WEATHER = {
+    "spring": {"clear": 45, "rain": 35, "storm": 8, "fog": 12},
+    "summer": {"clear": 65, "rain": 12, "storm": 18, "fog": 5},
+    "autumn": {"clear": 35, "rain": 32, "storm": 8, "fog": 25},
+    "winter": {"clear": 35, "snow": 50, "fog": 15},
+}
+WEATHER_SECONDS = (45, 120)       # how long one spell of weather lasts (real seconds, random)
+CLEAR_SECONDS = (60, 160)         # clear spells last a bit longer
+RAIN_FIRE_OUT_PER_SEC = 0.012     # chance per second that rain puts out an unsheltered campfire (storm x3)
+RAIN_FIRE_OUT_SECONDS = 14        # how long a rained-out fire takes to dry off and catch again
+SHELTER_RADIUS = 110              # a fire this close to a hut is sheltered from the rain
+RAIN_THIRST_PER_SEC = 0.35        # standing out in the rain: thirst drains this much slower
+SUMMER_THIRST_PER_SEC = 0.2       # summer days: thirst drains this much faster
+WINTER_COLD_PER_SEC = 1.3         # extra warmth lost on winter nights away from a fire / hut
+SNOW_COLD_PER_SEC = 0.6           # extra cold while it snows (day or night)
+STORM_COLD_PER_SEC = 0.6
+WINTER_ENERGY_PER_SEC = 0.5       # winter nights away from a fire also wear you out
+# how fast berry bushes regrow and animals turn up, per season (1 = normal)
+SEASON_BERRY_REGROW = {"spring": 1.3, "summer": 1.2, "autumn": 1.0, "winter": 0.4}
+SEASON_ANIMALS = {"spring": 1.8, "summer": 1.0, "autumn": 1.0, "winter": 0.5}
+
 # ----------------------------------------------------------------- enemies
 ZOMBIES = {
     #             hp   speed  damage  attack_every
