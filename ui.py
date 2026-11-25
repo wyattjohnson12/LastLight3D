@@ -258,6 +258,7 @@ class UI:
             self.txt("bossnext", f"Next boss in {n} night{'s' if n > 1 else ''}", W - 18, y, (200, 170, 160), 10,
                      anchor_x="right")
             y -= 16
+        y = self.draw_weather_hud(y)     # weather.py: season + weather
         if self.view_layer == "cave":
             self.txt("cavetag", "UNDERGROUND", W - 18, y, (190, 170, 255), 11, anchor_x="right", bold=True)
             y -= 16
