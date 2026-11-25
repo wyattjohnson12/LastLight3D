@@ -336,6 +336,8 @@ class UI:
         arcade.draw_lrbt_rectangle_filled(l, l + w * max(0, b.hp) / max(1, b.max_hp), y - 6, y + 6, (220, 50, 40))
         arcade.draw_lrbt_rectangle_filled(l, l + w * max(0, b.hp) / max(1, b.max_hp), y + 1, y + 6, (255, 140, 120, 120))
         self.txt("bossname", b.info["name"], W / 2, y + 14, (255, 200, 170), 12, anchor_x="center", bold=True)
+        self.txt("bosstype", self.boss_matchup_text(b.kind), W / 2, y - 24, (230, 220, 200), 10,
+                 anchor_x="center")     # spells.py: types + weaknesses you've found
 
     def context_hint(self):
         me = self.me
@@ -348,12 +350,17 @@ class UI:
         ex = self.near_exit(me)
         if ex:
             return f"{inter}  climb {'down into the cave' if me.layer == 'over' else 'back up to the surface'}"
+        shrine = self.shrine_hint(me, inter)          # spells.py
+        if shrine:
+            return shrine
         if self.near_pond(me):
             return f"{inter}  drink & fill flask"
         t = self.tame_target()
         if t:
             return f"{use}  try to tame the {t.kind} ({int(t.info['chance'] * 100)}% chance)"
         sel = me.hotbar[me.selected]
+        if sel and ITEMS[sel].get("spellbook"):
+            return self.spell_hint(me, "RT / A" if pad else "Left-click", use)
         if sel == "repair_hammer":
             return self.repair_hint(me, "RT / A" if pad else "Left-click")
         if sel and ITEMS[sel]["kind"] == "throw":

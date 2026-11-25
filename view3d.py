@@ -441,6 +441,7 @@ class View3D:
             self.flat(L.builds, BUILD_WALL_HEIGHT, boxes=True)
         if vl == "cave":
             self.stand(L.exits)
+            self.stand(getattr(L, "shrines", self._ghost3d), cut=0.05)     # spells.py
         self.stand(L.bushes)
         self.stand(L.rocks)
         self.stand(L.builds)
@@ -585,6 +586,12 @@ class View3D:
                 if p0 and p1:
                     arcade.draw_line(*p0, *p1, (214, 180, 120, 255), 3)
                     arcade.draw_circle_filled(p1[0], p1[1], 2.5, (210, 214, 224, 255))
+            elif s.kind == "fireball":
+                p = self.project(s.x, s.y, h)
+                if p:
+                    arcade.draw_circle_filled(p[0], p[1], 15, (255, 120, 30, 90))
+                    arcade.draw_circle_filled(p[0], p[1], 9, (255, 170, 60, 255))
+                    arcade.draw_circle_filled(p[0], p[1], 4, (255, 240, 180, 255))
             else:
                 g = self.project(s.x, s.y, 0)
                 p = self.project(s.x, s.y, h)

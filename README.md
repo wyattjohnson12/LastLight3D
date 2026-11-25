@@ -99,6 +99,26 @@ Craft a **Repair Hammer** (3 wood, 2 stone) and hit a damaged wall, fire, hut or
 back to full health, and costs part of its recipe: the more damage, the more it costs (a stone wall at half
 health = 2 stone + 1 wood). Holding the hammer shows health bars over damaged buildings.
 
+## Spells & boss weaknesses
+
+Five glowing **shrines** are hidden deep in the caves, one for each element. Stand at one and press
+**E** (B on a controller) to learn its spell - the first one also gives you a **Spellbook** and a few charges.
+Spells you learn are yours for the whole game, even if you die.
+
+- Hold the Spellbook: **left-click** (RT / A) casts, **right-click** (LT) switches to your next spell.
+- Spells cost **Spell Charges**, made at a workbench from coal (3) or cave crystal (8).
+- The spells: **Fireball** (fire), **Frost Nova** (frost), **Chain Lightning** (storm),
+  **Stone Spikes** (earth) and **Holy Light** (light - also heals everyone nearby).
+
+Every boss has a type, like Pokemon. The elements go round in a circle - **fire > frost > earth > storm > fire**
+(fire melts frost, frost cracks earth, earth grounds storm, rain puts out fire) - and **light beats shadow**,
+the undead (zombies and the Frost Wraith). The right element does **double damage** ("SUPER EFFECTIVE!"),
+the wrong one is resisted. Each weakness you discover shows up on the boss's health bar for the rest of
+the game. The Ember Blade, Fire Pot, Frost Spear and Titan Hammer count as elemental too.
+
+*Adding a boss?* Give it `"types": ["earth"]` in its `BOSSES` entry in `settings.py` (or add a line to
+`BOSS_TYPES` in `elements.py`). A boss without a type just takes normal damage from everything.
+
 ## Useful gear for boss fights
 
 - **Hunting Bow** (workbench) + **Arrows** - shoot from a safe distance.

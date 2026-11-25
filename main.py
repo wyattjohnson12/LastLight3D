@@ -32,6 +32,8 @@ import options
 import pets
 import repair
 import savegame
+import spells
+import elements
 import ui
 import view3d
 from gamepad import Gamepad
@@ -133,7 +135,8 @@ class Survivor:
 
 
 # =========================================================================== game
-class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
+class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spells, savegame.SaveGame, pets.Pets,
+                repair.Repair,
                 ui.UI, arcade.Window):
     def __init__(self):
         super().__init__(W, H, SCREEN_TITLE)
@@ -196,6 +199,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         self.seed = seed
         self.layers, self.nodes, self.links = build_world(seed)
         self.over, self.cave = self.layers["over"], self.layers["cave"]
+        self.place_shrines()       # spells.py: one spell shrine per element, deep in the cave
         self.centre = (WORLD_SIZE / 2, WORLD_SIZE / 2)
         self.player_list = arcade.SpriteList()
         self.held_list = arcade.SpriteList()
@@ -400,6 +404,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                 self.pad.rumble(s, d)
 
     def apply_event(self, ev):
+        if self.spell_event(ev):   # spells.py
+            return
         k = ev[0]
         if k == "snd":
             self._play(ev[1], ev[2], ev[3])
@@ -702,6 +708,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         """E / B: use a cave entrance or drink - whichever is at hand (storage opens on your own screen)."""
         if self.near_exit(p):
             self.travel(p)
+        elif self.near_shrine(p):
+            self.learn_at_shrine(p, self.near_shrine(p))     # spells.py
         elif self.near_pond(p):
             self.drink(p)
 
@@ -920,6 +928,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             return
         if w.get("repair") and self.repair(p):     # repair.py: hammer aimed at a building
             return
+        if w.get("spellbook"):                      # spells.py
+            self.cast(p)
+            return
         allround = bool(w.get("quake"))
 
         def in_front(pos, reach, cone=0.45):
@@ -1004,16 +1015,26 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             L = self.layers[s.layer]
             by = self.players.get(s.owner)
             self.fx_layer = s.layer
-            if s.kind == "arrow":
+            if s.kind in ("arrow", "fireball"):
                 if s.layer == "cave" and arcade.get_sprites_at_point((s.x, s.y), L.walls):
                     s.done = True
+                    if s.kind == "fireball":
+                        self.fireball_burst(s, by)
                     continue
                 sp = math.hypot(s.vx, s.vy) or 1
                 hit = next((e for e in list(L.zombies) + list(L.bosses)
                             if dist((s.x, s.y), e.position) < e.radius + 8), None)
                 if hit is not None:
-                    self.hit_enemy(hit, s.dmg, by, s.vx / sp, s.vy / sp)
+                    if s.kind == "fireball":
+                        self.fireball_burst(s, by)        # spells.py
+                    else:
+                        self.hit_enemy(hit, s.dmg, by, s.vx / sp, s.vy / sp)
                     s.done = True
+                    continue
+                if s.kind == "fireball":
+                    if s.t >= s.T:
+                        s.done = True
+                        self.fireball_burst(s, by)
                     continue
                 beast = next((a for a in L.animals if not a.pet and dist((s.x, s.y), a.position) < 22), None)
                 if beast is not None:
@@ -1033,10 +1054,10 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         for z in list(L.zombies):
             if dist(z.position, (s.x, s.y)) < r + z.radius * 0.5:
                 z.burn = max(z.burn, 3.0)
-                self.hit_enemy(z, s.dmg, by)
+                self.hit_enemy(z, s.dmg, by, element="fire")
         for b in list(L.bosses):
             if dist(b.position, (s.x, s.y)) < r + b.radius:
-                self.hit_enemy(b, s.dmg, by)
+                self.hit_enemy(b, s.dmg, by, element="fire")
         for a in list(L.animals):
             if not a.pet and dist(a.position, (s.x, s.y)) < r:
                 self.hit_animal(a, s.dmg, by)
@@ -1054,9 +1075,14 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         if angry:
             self.say("BZZZ! The bees are angry - run, or swat them!", 2.5, to=p)
 
-    def hit_enemy(self, z, dmg, by=None, fx=0.0, fy=0.0, w=None):
+    def hit_enemy(self, z, dmg, by=None, fx=0.0, fy=0.0, w=None, element=None):
         if isinstance(z, Boss) and z.state == "flee":
             return                         # it's escaping into the dawn - no cheap last hits
+        element = element or (w or {}).get("element")
+        if element:                        # elements.py: weaknesses and resistances
+            m = elements.multiplier(element, z)
+            dmg *= m
+            self.note_element(z, element, m)
         z.hp -= dmg
         z.flash = 0.12
         L = self.L(z)
@@ -2426,6 +2452,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                 self.tame(p, int(kw.get("aid", -1)))
             elif a == "pets":
                 self.command_pets(p)
+            elif a == "spellnext":
+                self.next_spell(p)
             elif a in ("petmode", "petname", "petarmor", "petsall"):
                 self.pet_action(p, a, kw)      # pets.py: only ever touches your own pets
             elif a == "throw":
@@ -2540,11 +2568,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         if "bd" in m:
             self.boss_day, self.boss_num = m["bd"][0], m["bd"][1]
             self.boss_hp = 1 if m["bd"][2] else None
-        self.shots = []
-        for kind, x, y, vx, vy, t, T, ly in m.get("sh", []):
-            s = Shot(kind, x, y, vx, vy, T, layer=LAYERS[ly])
-            s.t = t
-            self.shots.append(s)
+        self.shots = self.merge_shots(m.get("sh", []))     # spells.py
         if "n" in m:
             for n, ch in zip(self.nodes, m["n"]):
                 self.set_node_state(n, CODE_NODE.get(ch, "full"))
@@ -3000,6 +3024,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             else:
                 tx, ty = self.aim_world()
             self.action("throw", x=tx, y=ty, s=me.selected)
+        elif ITEMS[sel].get("spellbook"):
+            self.action("spellnext")          # spells.py: right-click / LT switches spell
 
     def on_mouse_release(self, x, y, button, modifiers):
         if button == arcade.MOUSE_BUTTON_LEFT:
