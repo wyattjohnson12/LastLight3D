@@ -665,7 +665,30 @@ def _bear_trap_icon(img):
     _circle(img, 24, 24, 4, (150, 120, 70, 255), (60, 48, 30, 255), 1)     # trigger plate
 
 
+def _repair_hammer_icon(img):
+    _line(img, [(8, 40), (30, 16)], (118, 80, 46, 255), 4.5)
+    _poly(img, [(22, 10), (34, 4), (44, 16), (32, 22)], (170, 176, 186, 255), (70, 74, 82, 255), 1.4)
+    _line(img, [(36, 8), (44, 4)], (200, 204, 212, 255), 3)          # claw
+    _circle(img, 13, 33, 5, None, (120, 220, 120, 255), 2)            # green "fix" spark
+    _line(img, [(13, 30), (13, 36)], (120, 220, 120, 255), 2)
+    _line(img, [(10, 33), (16, 33)], (120, 220, 120, 255), 2)
+
+
+def _pet_armor_icon(col, trim):
+    def f(img):
+        _poly(img, [(8, 16), (40, 16), (44, 34), (34, 40), (14, 40), (4, 34)], col + (255,),
+              _shade(col, 0.5) + (255,), 1.4)
+        _line(img, [(8, 22), (40, 22)], trim + (255,), 2)
+        for x in (14, 24, 34):
+            _circle(img, x, 31, 2.2, trim + (255,))
+        _ball(img, (18, 6, 30, 18), (230, 210, 190))                     # paw pad
+    return f
+
+
 art.ICON_MAKERS.update({
+    "repair_hammer": _repair_hammer_icon,
+    "pet_leather_armor": _pet_armor_icon((150, 100, 56), (210, 180, 120)),
+    "pet_iron_armor": _pet_armor_icon((160, 166, 178), (220, 224, 232)),
     "bow": _bow_icon, "arrows": _arrows_icon, "fire_pot": _fire_pot_icon, "honey_salve": _salve_icon,
     "bear_trap": _bear_trap_icon,
     "meat": lambda img: _meat_icon(img), "cooked_meat": lambda img: _meat_icon(img, True),

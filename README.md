@@ -54,7 +54,8 @@ That's it - run the game again and you have every update.
 | Backpack, crafting, armor | TAB | Y |
 | Storage, cave entrance, drink | E | B |
 | Quick eat / drink | Q | B |
-| Pet orders | F | D-pad down |
+| Pets menu | P | D-pad up |
+| Quick order for all pets | F | D-pad down |
 | Rest | SHIFT | hold X |
 | Pause / help | ESC | Menu |
 | Save game (on the pause screen) | S | X |
@@ -68,6 +69,9 @@ title screen, choose a save, then play it solo, host it for co-op, or play it sp
 Co-op friends get their own backpack, armor and pets back if they join with **the same name** as last
 time. Saves live in the `saves/` folder.
 
+To delete a save: in **Load saved game**, highlight it and press **DELETE** (or **X** on a
+controller), or pick it and choose **Delete this save**. You'll be asked to confirm first.
+
 ## Difficulty (day & night length, boss timing)
 
 On the title screen, **Difficulty** sets how many real seconds the day and the night last:
@@ -80,6 +84,20 @@ keeps its own settings, but you can switch a save to the title-screen settings w
 The first boss rises on night 3 (or whatever "nights between bosses" is set to). If you don't kill it,
 it retreats at dawn - keeping every wound you gave it - and comes back the next night, and every night
 after, until it's beaten. Kill it, and the next boss comes 3 nights later.
+
+## Pets
+
+Tame an animal by holding its favourite food and right-clicking it (wolf: meat, boar & rabbit: berries,
+bee: honey). Each player can have **3 pets** - in co-op everyone has their own. Press **P** (D-pad up)
+for the **Pets menu**: see their health, give each one its own order (follow / work / stay), rename them,
+and put on **Pet Armor** (leather or iron, made at a workbench) so zombie bites hurt less.
+**F** (D-pad down) still gives the same quick order to all your pets at once.
+
+## Repairing buildings
+
+Craft a **Repair Hammer** (3 wood, 2 stone) and hit a damaged wall, fire, hut or bench with it. It goes
+back to full health, and costs part of its recipe: the more damage, the more it costs (a stone wall at half
+health = 2 stone + 1 wood). Holding the hammer shows health bars over damaged buildings.
 
 ## Useful gear for boss fights
 

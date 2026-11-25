@@ -29,6 +29,8 @@ import intro
 import local_coop
 import net
 import options
+import pets
+import repair
 import savegame
 import ui
 import view3d
@@ -131,7 +133,8 @@ class Survivor:
 
 
 # =========================================================================== game
-class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, ui.UI, arcade.Window):
+class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
+                ui.UI, arcade.Window):
     def __init__(self):
         super().__init__(W, H, SCREEN_TITLE)
         self.background_color = (24, 34, 22)
@@ -153,7 +156,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         self.pending_save = None   # a save picked on the title screen, waiting for split-screen to start
         self.save_page = 0
         self.picked_save = None    # (path, meta) chosen in the "Load saved game" list
-        self.confirm_delete = False
+        self.confirm_from = ("load", 0)   # where "No, keep it" goes back to
         self.save_list = []
         self.use_title_difficulty = False
         self.pad = Gamepad()
@@ -469,7 +472,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
 
     # ------------------------------------------------------------------ inventory & storage
     def _hotbar_add(self, p, item, force=False):
-        if ITEMS[item]["kind"] in ("material", "armor") or item in p.hotbar:
+        if ITEMS[item]["kind"] in ("material", "armor", "petarmor") or item in p.hotbar:
             return
         for i, s in enumerate(p.hotbar):
             if s is None:
@@ -489,6 +492,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             return
         if kind == "material":
             self.say("Materials live in your backpack - craft something with them!", 2, to=p)
+            return
+        if kind == "petarmor":
+            self.say("Pet armor: open the Pets menu (P / D-pad up) and click it next to a pet.", 2.5, to=p)
             return
         if item in p.hotbar:
             p.hotbar[p.hotbar.index(item)] = None
@@ -731,9 +737,11 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         self.fx_layer = "over"
         if random.random() < a.info["chance"]:
             a.owner, a.mode, a.hp, a.aggro = p.id, "follow", a.max_hp, None
+            a.name = self.random_pet_name(p)
             self.burst(a.center_x, a.center_y, (255, 120, 160), 14, 90, 3, 0.9)
             self.play("tame", 0.35, to=p)
-            self.say(f"You tamed a {a.kind}!  {a.info['desc']}  Press F (or D-pad down) to give orders.", 6, to=p)
+            self.say(f"You tamed a {a.kind} - meet {a.name}!  {a.info['desc']}  "
+                     "P (or D-pad up): Pets menu to rename it, give orders and armor.", 7, to=p)
         else:
             self.burst(a.center_x, a.center_y, (200, 200, 200), 6, 60)
             self.say(f"The {a.kind} snatched the food but isn't sure about you yet... try again.", 2.5, to=p)
@@ -909,6 +917,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         fx, fy = math.cos(p.face), math.sin(p.face)
         if w.get("ranged"):
             self.shoot(p, w)
+            return
+        if w.get("repair") and self.repair(p):     # repair.py: hammer aimed at a building
             return
         allround = bool(w.get("quake"))
 
@@ -1089,7 +1099,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                 for k, v in a.info["drops"].items():
                     self.give(by, k, v, a.position)
             if a.pet:
-                self.say(f"A pet {a.kind} died...", 3)
+                owner = self.players.get(a.owner)
+                lost = f" Its {ITEMS[a.armor]['name']} was lost." if a.armor else ""
+                self.say(f"{self.pet_name(a)} the {a.kind} died...{lost}", 4, to=owner)
             self.amap.pop(a.aid, None)
             a.remove_from_sprite_lists()
 
@@ -1686,11 +1698,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                     self.damage_structure(built[0], z.damage * 0.6)
                     z.attack_cd = z.attack_every
                 elif pet:
-                    pet.hp -= z.damage * 0.5
-                    pet.flash = 0.12
+                    self.hurt_pet(pet, z.damage * 0.5)     # pet armor soaks some of it
                     z.attack_cd = z.attack_every
-                    if pet.hp <= 0:
-                        self.hit_animal(pet, 0, None)
             if z.trap_cd <= 0:
                 for t in arcade.check_for_collision_with_list(z, L.traps):
                     if t.kind == "bear_trap":
@@ -2417,6 +2426,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                 self.tame(p, int(kw.get("aid", -1)))
             elif a == "pets":
                 self.command_pets(p)
+            elif a in ("petmode", "petname", "petarmor", "petsall"):
+                self.pet_action(p, a, kw)      # pets.py: only ever touches your own pets
             elif a == "throw":
                 p.selected = max(0, min(HOTBAR_SLOTS - 1, int(kw.get("s", p.selected))))
                 it = p.hotbar[p.selected]
@@ -2439,7 +2450,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             "z": [[z.zid, z.kind, r1(z.center_x), r1(z.center_y), round(z.heading, 2), int(z.flash > 0) +
                    2 * int(z.chill > 0), li(z.layer)] for L in self.layers.values() for z in L.zombies],
             "a": [[a.aid, a.kind, r1(a.center_x), r1(a.center_y), round(a.heading, 2), int(a.flash > 0), a.owner,
-                   PET_MODES.index(a.mode), int(a.carrying > 0)] for a in self.over.animals],
+                   PET_MODES.index(a.mode), int(a.carrying > 0), a.name, a.armor or "", r1(a.hp), a.max_hp]
+                  for a in self.over.animals],
             "b": [[b.bid, b.kind, r1(b.center_x), r1(b.center_y), round(b.heading, 2), int(b.hp), int(b.max_hp),
                    int(b.flash > 0), b.alpha] for b in self.over.bosses],
             "hz": [[h.kind, r1(h.x), r1(h.y), h.r, r1(h.t), r1(h.tele), round(h.a, 2), h.ln, r1(h.vx), r1(h.vy)]
@@ -2611,6 +2623,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                 a.flash = 0.12
             a.owner, a.mode = row[6], PET_MODES[row[7]]
             a.carry = {"x": 1} if row[8] else {}
+            if len(row) > 12:
+                a.name, a.armor, a.hp, a.max_hp = row[9], row[10] or None, row[11], row[12]
         for row in m["b"]:
             b = self.bmap[row[0]]
             b.target, b.heading, b.hp, b.max_hp = (row[2], row[3]), row[4], row[5], row[6]
@@ -2785,6 +2799,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             return
         if self.local and self.state == "playing" and not self.local_key(key):
             return
+        if self.rename_key(key):          # typing a pet's name (pets.py)
+            self.keys.discard(key)
+            return
         self.use_pad = False
         if self.state == "title":
             self.title_key(key, modifiers)
@@ -2815,6 +2832,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             return
         if self.ui_open == "storage" and arcade.key.KEY_1 <= key <= arcade.key.KEY_4:
             self.move_amount = key - arcade.key.KEY_1
+            return
+        if key == arcade.key.P:
+            self.toggle_pets()
             return
         if key in (arcade.key.TAB, arcade.key.I):
             self.ui_open = None if self.ui_open == "inv" else "inv"
@@ -2852,8 +2872,11 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             step = 30 if modifiers & arcade.key.MOD_SHIFT else 5
             self.diff_adjust(self.menu_sel, step if key in (arcade.key.RIGHT, arcade.key.D) else -step)
             return
-        if key == arcade.key.ESCAPE and self.menu in ("diff", "load", "save"):
+        if key == arcade.key.ESCAPE and self.menu in ("diff", "load", "save", "confirm"):
             self.menu_back()
+            return
+        if self.menu == "load" and key in (arcade.key.DELETE, arcade.key.BACKSPACE):
+            self.delete_highlighted()
             return
         if key in (arcade.key.UP, arcade.key.W) and not (self.menu == "join" and key == arcade.key.W):
             self.menu_sel = (self.menu_sel - 1) % len(items)
@@ -2883,6 +2906,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                 if ch and len(self.ip_text) < 40:
                     self.ip_text += ch
                     self.menu_sel = len(items) - 2
+
+    def on_text(self, text):
+        self.rename_text_in(text)         # letters typed into a pet's name
 
     def on_key_release(self, key, modifiers):
         self.keys.discard(key)
@@ -2929,6 +2955,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             return
         if self.ui_open == "storage":
             self.click_storage(x, y, button, modifiers)
+            return
+        if self.ui_open == "pets":
+            self.click_pets(x, y)
             return
         if button == arcade.MOUSE_BUTTON_LEFT:
             self.mouse_down = True
@@ -3033,8 +3062,11 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                     self._stick_x = 0.2
                 elif abs(lx) < 0.3:
                     self._stick_x = 0
-            if "b" in pr and self.menu in ("diff", "load", "save"):
+            if "b" in pr and self.menu in ("diff", "load", "save", "confirm"):
                 self.menu_back()
+                return
+            if "x" in pr and self.menu == "load":
+                self.delete_highlighted()
                 return
             if "a" in pr or "start" in pr:
                 self.menu_pick(self.menu_sel)
@@ -3080,6 +3112,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                 self.move_amount = (self.move_amount + 1) % len(ui.AMOUNTS)
             if "y" in pr or "b" in pr or "back" in pr:
                 self.ui_open = None
+            return
+        if "dpup" in pr:
+            self.toggle_pets(True)
             return
         if "y" in pr or "back" in pr:
             self.ui_open = "inv"

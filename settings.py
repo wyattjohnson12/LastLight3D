@@ -91,7 +91,10 @@ ANIMALS = {
             "desc": "Honey bee: on WORK it buzzes between flowers and brings honey to your Storage Bins."},
 }
 ANIMAL_CAP = 26
-MAX_PETS = 3
+MAX_PETS = 3               # per player - in co-op every tamer has their own 3
+PET_ARMOR_SOAK = 0.15      # each point of pet armor: bites do 1 / (1 + armor * this) damage
+PET_NAMES = ["Biscuit", "Pepper", "Shadow", "Maple", "Scout", "Clover", "Ember", "Rocky", "Hazel", "Bandit",
+             "Sunny", "Tank", "Juniper", "Pickle", "Ranger", "Willow", "Nugget", "Ash", "Koda", "Bramble"]
 PET_CARRY = 6
 
 # ----------------------------------------------------------------- bees & honey
@@ -201,6 +204,9 @@ ITEMS = {
                     "slow": 1, "desc": "7 damage, huge reach. Chills enemies so they slow down."},
     "titan_hammer": {"name": "Titan Hammer", "kind": "weapon", "damage": 12, "reach": 76, "cooldown": 0.9,
                      "quake": 1, "desc": "12 damage to EVERYTHING around you. Slow but devastating."},
+    "repair_hammer": {"name": "Repair Hammer", "kind": "tool", "damage": 1.5, "reach": 70, "cooldown": 0.5,
+                      "repair": 1, "desc": "Hit a damaged building to fix it. Costs part of its recipe - the more "
+                                           "damage, the more it costs."},
     "bow":     {"name": "Hunting Bow", "kind": "weapon", "damage": 5, "reach": 560, "cooldown": 0.65, "ranged": 1,
                 "desc": "Shoots where you aim, 5 damage. Uses Arrows from your backpack. Keep your distance!"},
     "fire_pot": {"name": "Fire Pot", "kind": "throw", "damage": 18,
@@ -222,6 +228,10 @@ ITEMS = {
                       "desc": "Armor 7, warmth 2."},
     "frost_cloak":   {"name": "Frost Cloak", "kind": "armor", "slot": "cloak", "armor": 2, "warmth": 14,
                       "desc": "Armor 2, warmth 14. You'll never be cold again."},
+    "pet_leather_armor": {"name": "Leather Pet Armor", "kind": "petarmor", "armor": 3,
+                          "desc": "Pet armor 3: bites hurt your pet about a third less. Put it on in the Pets menu (P)."},
+    "pet_iron_armor": {"name": "Iron Pet Armor", "kind": "petarmor", "armor": 6,
+                       "desc": "Pet armor 6: bites do about half damage. Lost if the pet dies. Pets menu (P)."},
     "titan_plate":   {"name": "Titan Plate", "kind": "armor", "slot": "body", "armor": 10, "warmth": 2,
                       "desc": "Armor 10, warmth 2. The best protection there is."},
     # --- buildings
@@ -279,6 +289,7 @@ CRAFT_TABS = {
         R("iron_sword", {"wood": 1, "iron_ingot": 4, "leather": 1}, "workbench"),
         R("frost_spear", {"wood": 3, "iron_ingot": 2, "frost_shard": 2}, "workbench"),
         R("bow", {"wood": 6, "fiber": 5}, "workbench"),
+        R("repair_hammer", {"wood": 3, "stone": 2}),
         R("titan_hammer", {"iron_ingot": 5, "titan_core": 1, "leather": 2}, "workbench"),
         R("ember_blade", {"iron_ingot": 4, "ember_heart": 1, "crystal": 2}, "workbench"),
     ],
@@ -291,6 +302,8 @@ CRAFT_TABS = {
         R("chitin_armor", {"chitin": 4, "leather": 2, "iron_ingot": 2}, "workbench"),
         R("frost_cloak", {"frost_shard": 3, "fur": 4, "crystal": 1}, "workbench"),
         R("titan_plate", {"titan_core": 1, "iron_ingot": 8, "crystal": 2}, "workbench"),
+        R("pet_leather_armor", {"leather": 3, "fiber": 2}, "workbench"),
+        R("pet_iron_armor", {"iron_ingot": 3, "leather": 1}, "workbench"),
     ],
     "Build": [
         R("campfire", {"wood": 5, "stone": 3}),

@@ -193,7 +193,7 @@ class SaveGame:
             "bosses": [[b.kind, round(b.center_x, 1), round(b.center_y, 1), b.hp, b.max_hp] for b in self.over.bosses
                        if b.state != "flee"],      # one running off at dawn is already gone
             "pets": [[a.kind, round(a.center_x, 1), round(a.center_y, 1), owner_key(a), PET_MODES.index(a.mode),
-                      a.hp, a.carry] for a in self.over.animals if a.pet and owner_key(a)],
+                      a.hp, a.carry, a.name, a.armor] for a in self.over.animals if a.pet and owner_key(a)],
             "players": records,
         }
 
@@ -238,7 +238,9 @@ class SaveGame:
                 self.next_bid += 1
                 self.over.bosses.append(b)
                 self.bmap[b.bid] = b
-        for i, (kind, x, y, key, mode, hp, carry) in enumerate(data.get("pets", [])):
+        for i, row in enumerate(data.get("pets", [])):
+            kind, x, y, key, mode, hp, carry = row[:7]
+            name, armor = (row[7], row[8]) if len(row) > 8 else ("", None)    # older saves: no names / armor
             if kind not in ANIMALS:
                 continue
             a = Animal(kind, x, y, self.next_aid)
@@ -248,6 +250,8 @@ class SaveGame:
             a.mode = PET_MODES[mode] if 0 <= mode < len(PET_MODES) else "stay"
             a.hp = hp
             a.carry = _items(carry)
+            a.name = str(name or "")[:12]
+            a.armor = armor if armor in ITEMS else None
             self.over.animals.append(a)
             self.amap[a.aid] = a
         self.away = dict(data.get("players", {}))

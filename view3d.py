@@ -526,6 +526,7 @@ class View3D:
                     arcade.draw_circle_filled(s.center_x, s.center_y, 60, (255, 240, 200, 40))
             self.gui.use()
 
+        self.draw_repair_bars(L)  # repair.py: holding the hammer shows how hurt buildings are
         self.draw_shots(vl)      # after the darkness: a burning fire pot shows up at night
 
         # ---- words over heads
@@ -594,6 +595,7 @@ class View3D:
                     arcade.draw_circle_filled(p[0] + 2, p[1] + 8, 3.5, (255, 170, 50, 255))
 
     def draw_pet_marks(self, L):
+        tags = []          # name tags already placed this frame - bunched-up pets stack theirs
         for a in L.animals:
             if not a.pet:
                 continue
@@ -604,6 +606,14 @@ class View3D:
             col = owner.color if owner else (220, 220, 220)
             arcade.draw_circle_filled(s[0], s[1], 5, col + (230,))
             arcade.draw_circle_outline(s[0], s[1], 5, (255, 255, 255, 200), 1)
+            if a.name:
+                shield = " +" if a.armor else ""
+                ty = s[1] + 9
+                while any(abs(s[0] - tx) < 70 and abs(ty - yy) < 13 for tx, yy in tags):
+                    ty += 13
+                tags.append((s[0], ty))
+                self.txt(f"petname{a.aid}", a.name + shield, s[0], ty, col + (230,), 10, anchor_x="center",
+                         bold=True)
             if a.carrying:
                 arcade.draw_circle_filled(s[0] + 10, s[1], 4, (255, 220, 120, 230))
 

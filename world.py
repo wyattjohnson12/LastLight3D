@@ -126,6 +126,8 @@ class Animal(arcade.Sprite):
         self.target = (x, y)
         self.layer = "over"
         self.hive = None         # wild bees: the beehive they buzz around
+        self.name = ""           # pets: what their tamer called them
+        self.armor = None        # pets: pet armor item they're wearing
 
     @property
     def pet(self):

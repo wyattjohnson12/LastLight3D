@@ -331,7 +331,7 @@ class LocalCoop:
         kb = self.kb_slot()
         if kb:
             self.focus(kb)
-            if self.ui_open is None and key in (arcade.key.TAB, arcade.key.I, arcade.key.E):
+            if self.ui_open is None and key in (arcade.key.TAB, arcade.key.I, arcade.key.E, arcade.key.P):
                 self._pending_ui_slot = kb
             return True
         return key == arcade.key.ESCAPE
@@ -401,6 +401,8 @@ class LocalCoop:
                 self.draw_inventory()
             elif self.ui_open == "storage":
                 self.draw_storage()
+            elif self.ui_open == "pets":
+                self.draw_pets()
             if self.paused:
                 self.draw_help(True)
             self.camera, self.gui = cam, gui

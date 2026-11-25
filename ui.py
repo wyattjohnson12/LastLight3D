@@ -99,6 +99,8 @@ class UI:
                 self.draw_inventory()
             elif self.ui_open == "storage":
                 self.draw_storage()
+            elif self.ui_open == "pets":
+                self.draw_pets()
             if self.paused:
                 self.draw_help(True)
         if not me.alive:
@@ -352,6 +354,8 @@ class UI:
         if t:
             return f"{use}  try to tame the {t.kind} ({int(t.info['chance'] * 100)}% chance)"
         sel = me.hotbar[me.selected]
+        if sel == "repair_hammer":
+            return self.repair_hint(me, "RT / A" if pad else "Left-click")
         if sel and ITEMS[sel]["kind"] == "throw":
             return f"{use}  throw {ITEMS[sel]['name']} where you aim  ({me.inv.get(sel, 0)} left)"
         if sel and ITEMS[sel].get("ranged"):
@@ -462,7 +466,8 @@ class UI:
             self.txt("tipd", ITEMS[tip]["desc"], l + 24, b + 44, (210, 210, 210), 11)
             kind = ITEMS[tip]["kind"]
             how = {"armor": "Click to wear it (click a worn item to take it off).",
-                   "material": "Crafting material."}.get(kind, f"Click to put it in hotbar slot {me.selected + 1}.")
+                   "material": "Crafting material.",
+                   "petarmor": "Put it on a pet: open the Pets menu (P / D-pad up)."}.get(kind, f"Click to put it in hotbar slot {me.selected + 1}.")
             self.txt("tiph", how, l + 24, b + 24, (150, 150, 150), 10)
         else:
             keys = "LB/RB" if self.use_pad else "1-8"
@@ -724,8 +729,10 @@ class UI:
                 gap = d[3] if len(d) > 3 else BOSS_EVERY
                 rows.append(f"Difficulty:  {d[0]} {d[1]}s / {d[2]}s, boss every {gap}   "
                             f"({'title-screen setting' if use else 'as saved'})")
-            rows.append("Delete this save - pick again to confirm" if self.confirm_delete else "Delete this save")
+            rows.append("Delete this save")
             return rows + ["Back"]
+        if self.menu == "confirm":
+            return ["No, keep it", "Yes, delete it forever"]
         games = self.finder.list() if self.finder else []
         return [f"{v[0]}'s game   ({v[1]}/4)   {k[0]}" for k, v in games] + ["Connect to IP:  " + self.ip_text, "Back"]
 
@@ -734,10 +741,26 @@ class UI:
         return meta.get("difficulty") or self.chosen_difficulty()
 
     def menu_back(self):
+        if self.menu == "confirm":          # "No" / ESC: back where you came from, nothing deleted
+            self.menu, self.menu_sel = self.confirm_from
+            self.menu_note = savegame.save_label(self.picked_save[1]) if self.menu == "save" else ""
+            return
         back = {"diff": ("main", 5), "load": ("main", 4), "save": ("load", 0)}
         self.menu, self.menu_sel = back.get(self.menu, ("main", 0))
         self.menu_note = ""
-        self.confirm_delete = False
+
+    def ask_delete(self, save, came_from):
+        """Open the 'are you sure?' screen for one save. 'No' is picked by default."""
+        self.picked_save = save
+        self.confirm_from = came_from
+        self.menu, self.menu_sel = "confirm", 0
+        self.menu_note = savegame.save_label(save[1])
+
+    def delete_highlighted(self):
+        """DELETE / BACKSPACE (or X on a controller) on the Load list."""
+        page = self.save_list[self.save_page * 5:(self.save_page + 1) * 5]
+        if self.menu == "load" and self.menu_sel < len(page):
+            self.ask_delete(page[self.menu_sel], ("load", self.menu_sel))
 
     def diff_adjust(self, i, amount):
         """LEFT / RIGHT on the custom day / night rows of the difficulty screen."""
@@ -800,7 +823,6 @@ class UI:
             if i < len(page):
                 self.picked_save = page[i]
                 self.use_title_difficulty = False
-                self.confirm_delete = False
                 self.menu, self.menu_sel, self.menu_note = "save", 0, savegame.save_label(page[i][1])
             elif label.startswith("More"):
                 pages = (len(self.save_list) + 4) // 5
@@ -811,15 +833,7 @@ class UI:
         elif self.menu == "save":
             path, meta = self.picked_save
             if label.startswith("Delete"):
-                if self.confirm_delete:
-                    savegame.delete_save(path)
-                    self.save_list = savegame.list_saves()
-                    self.save_page = 0
-                    self.confirm_delete = False
-                    self.menu, self.menu_sel = ("load", 0) if self.save_list else ("main", 4)
-                    self.menu_note = "Save deleted."
-                else:
-                    self.confirm_delete = True
+                self.ask_delete(self.picked_save, ("save", i))
                 return
             if label.startswith("Back"):
                 self.menu_back()
@@ -842,6 +856,17 @@ class UI:
             else:
                 self.pending_save = data
                 self.local_lobby_open()
+        elif self.menu == "confirm":
+            if i == 1:
+                path, meta = self.picked_save
+                savegame.delete_save(path)
+                self.save_list = savegame.list_saves()
+                pages = max(1, (len(self.save_list) + 4) // 5)
+                self.save_page = min(self.save_page, pages - 1)
+                self.menu, self.menu_sel = ("load", 0) if self.save_list else ("main", 4)
+                self.menu_note = f"Deleted:  {savegame.save_label(meta)}"
+            else:
+                self.menu_back()
         else:
             games = self.finder.list() if self.finder else []
             if i < len(games):
@@ -859,6 +884,8 @@ class UI:
         top = 400 if many else 360 if self.menu != "main" else 350
         gap, half = (38, 16) if many else (46, 18)
         hw = 300 if self.menu in ("diff", "load", "save") else 270 if self.menu == "main" else 230
+        if self.menu == "confirm":
+            top, hw = 290, 200
         return [(it, (W / 2 - hw, W / 2 + hw, top - i * gap - half, top - i * gap + half)) for i, it in enumerate(items)]
 
     def draw_title(self):
@@ -877,8 +904,14 @@ class UI:
             self.draw_lobby()
             return
         heads = {"diff": "DIFFICULTY  -  day & night length, and how often bosses come",
-                 "load": "LOAD A SAVED GAME", "save": "RESUME THIS GAME AS..."}
-        if self.menu in heads:
+                 "load": "LOAD A SAVED GAME", "save": "RESUME THIS GAME AS...",
+                 "confirm": "DELETE THIS SAVE?"}
+        if self.menu == "confirm":
+            self.txt("conf0", "DELETE THIS SAVE?", W / 2, 440, (255, 140, 120), 24, anchor_x="center", bold=True)
+            self.txt("conf1", self.menu_note, W / 2, 400, (255, 255, 255), 15, anchor_x="center", bold=True)
+            self.txt("conf2", "This can't be undone - the world, everyone's stuff and pets are gone for good.",
+                     W / 2, 370, (255, 170, 150), 13, anchor_x="center")
+        elif self.menu in heads:
             top = self.menu_rows()[0][1][3]
             self.txt("mhead", heads[self.menu], W / 2, top + 16, (255, 230, 170), 16, anchor_x="center", bold=True)
         for i, (label, (l, r, b, t)) in enumerate(self.menu_rows()):
@@ -889,7 +922,7 @@ class UI:
             caret = "_" if label.startswith("Connect") and sel and int(self.flame_t * 2) % 2 == 0 else ""
             self.txt(f"menu{self.menu}{i}", label + caret, W / 2, b + 12, (255, 255, 255), 15, anchor_x="center",
                      bold=sel)
-        if self.menu_note:
+        if self.menu_note and self.menu != "confirm":
             self.txt("note", self.menu_note, W / 2, 96, (255, 200, 150), 13, anchor_x="center")
         pad = "Controller ready - D-pad + A to pick" if self.pad.connected else "Plug in a controller any time"
         self.txt("t5", f"Playing as {self.my_name}     |     {pad}", W / 2, 70, (200, 200, 200), 12,
@@ -904,9 +937,15 @@ class UI:
             self.txt("t6", f"LEFT / RIGHT or click the arrows (SHIFT = 30s).   Day {lo_d}-{hi_d}s,  night {lo_n}-{hi_n}s,  "
                      f"bosses every {lo_g}-{hi_g} nights.   Saved with each game.", W / 2, 46, (160, 160, 160), 11,
                      anchor_x="center")
-        elif self.menu in ("load", "save"):
+        elif self.menu == "load":
+            delete = "X" if self.use_pad else "DELETE"
+            self.txt("t6", f"Pick a save to play it.   {delete}: delete the highlighted save.   ESC = back",
+                     W / 2, 46, (160, 160, 160), 11, anchor_x="center")
+        elif self.menu == "save":
             self.txt("t6", "Games save every morning, when you leave, and with S on the pause screen.   ESC = back",
                      W / 2, 46, (160, 160, 160), 11, anchor_x="center")
+        elif self.menu == "confirm":
+            self.txt("t6", "ESC / B = keep it", W / 2, 46, (160, 160, 160), 11, anchor_x="center")
         else:
             self.txt("t6", "Tame animals  -  craft armor  -  explore the caves  -  a boss rises every 3rd night",
                      W / 2, 46, (160, 160, 160), 11, anchor_x="center")
@@ -928,7 +967,8 @@ class UI:
             ("1-8, wheel  |  LB / RB", "choose hotbar item"),
             ("TAB  |  Y", "backpack, crafting & armor"),
             ("E  |  B", "open storage, use cave entrance, drink"),
-            ("Q  |  B", "quick eat / drink"), ("F  |  D-pad down", "pet orders: follow / work / stay"),
+            ("Q  |  B", "quick eat / drink"), ("P  |  D-pad up", "Pets menu: names, orders, pet armor"),
+            ("F  |  D-pad down", "quick order for all pets: follow / work / stay"),
             ("SHIFT  |  hold X", "rest (heals in a hut or by a fire)"),
         ]
         top = H - 120
