@@ -21,6 +21,7 @@ import sys
 
 import arcade
 
+import swamp  # noqa: F401  (first: adds the Mire's items, recipes and boss before ui.py reads them)
 import art
 import art_bees
 import art_extra
@@ -134,7 +135,7 @@ class Survivor:
 
 # =========================================================================== game
 class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
-                ui.UI, arcade.Window):
+                swamp.Swamp, ui.UI, arcade.Window):
     def __init__(self):
         super().__init__(W, H, SCREEN_TITLE)
         self.background_color = (24, 34, 22)
@@ -196,6 +197,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         self.seed = seed
         self.layers, self.nodes, self.links = build_world(seed)
         self.over, self.cave = self.layers["over"], self.layers["cave"]
+        self.build_swamp()         # swamp.py: the Mire (only adds nodes at the end, so saves still line up)
         self.centre = (WORLD_SIZE / 2, WORLD_SIZE / 2)
         self.player_list = arcade.SpriteList()
         self.held_list = arcade.SpriteList()
@@ -423,6 +425,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
             self.start_cutscene(ev[1], ev[2], ev[3], ev[4], local=True, mode=mode, hp=hp)
         elif k == "cutend":
             self.cut = None
+        else:
+            self.swamp_event(ev)       # swamp.py: roots holding you in place
 
     # ------------------------------------------------------------------ time of day
     @property
@@ -1123,6 +1127,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                     self.give(by, "coal", 1, z.position)
             elif z.kind == "brute":
                 self.give(by, "stone", 3, z.position)
+            elif z.kind == "drowned":
+                self.give(by, "reeds" if roll < 0.55 else "glowcap", 1, z.position)
             elif roll < 0.30:
                 self.give(by, "fiber", 1, z.position)
             elif roll < 0.42:
@@ -1159,7 +1165,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                     continue
             if not (60 < x < L.size - 60 and 60 < y < L.size - 60):
                 continue
-            z = Zombie(kind, x, y, self.next_zid, layer)
+            z = Zombie(self.swamp_zombie_kind(kind, x, y, layer), x, y, self.next_zid, layer)
             if arcade.check_for_collision_with_lists(z, [L.solid, L.huts]):
                 continue
             if layer == "cave" and not arcade.get_sprites_at_point((x, y), L.ground):
@@ -1358,6 +1364,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                 self._update_hazards(dt)
                 self._update_shots(dt)
                 self._update_world(dt)
+                self.update_swamp(dt)      # swamp.py: the Drowned rise at night
         else:
             if not self.cut:
                 self.clock += dt * self.clock_rate() * (8 if self.fast_forward else 1)
@@ -1423,6 +1430,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
         speed = PLAYER_SPEED if p.energy > 0 else TIRED_SPEED
         if p.warmth <= 0:
             speed *= 0.75
+        speed *= self.swamp_speed(p, dt)     # swamp.py: mud, bog pools, grasping roots
         if moving:
             n = max(1.0, math.hypot(dx, dy))
             p.sprite.change_x = dx / n * speed * dt
@@ -2026,6 +2034,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                     b.state = "walk"
                     self.burst(b.center_x, b.center_y, (200, 230, 255), 26, 200, 4, 0.8)
                     self.play("laser", 0.4, at=b.position, layer="over")
+            elif b.state == "submerge":      # swamp.py: the Mire Lurker under the mud
+                speed = 0
+                self.mire_submerge(b, dt, alive)
             else:
                 self._boss_abilities(b, tgt, alive, d)
             b.snared = max(0, b.snared - dt)
@@ -2141,12 +2152,17 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                 b.charge_dir = (math.cos(a), math.sin(a))
                 b.state, b.state_t = "windup", 1.0
                 self.hazards.append(Hazard("line", b.center_x, b.center_y, 56, tele=1.0, a=a, ln=440, owner=b))
+        elif kind == "mire":
+            self.mire_abilities(b, tgt, alive, d)     # swamp.py
 
     def _update_hazards(self, dt):
         self.fx_layer = "over"
         alive = self.alive_players("over")
         new = []
         for h in self.hazards:
+            if h.kind in self.SWAMP_HAZARDS:     # swamp.py
+                new += self.swamp_hazard(h, dt, alive)
+                continue
             if h.tele > 0:
                 h.tele -= dt
                 if h.kind == "line" and h.owner is not None:
@@ -2293,6 +2309,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, savegame.S
                 p.held.center_x = p.sprite.center_x + math.cos(a) * 26
                 p.held.center_y = p.sprite.center_y + math.sin(a) * 26
                 p.held.angle = -math.degrees(a)
+        self.swamp_visuals(dt)       # swamp.py: glowcaps, fireflies
 
     def _update_camera(self, dt):
         vx, vy = self.view_pos()
@@ -3144,6 +3161,7 @@ def main():
             art.player(i)
         art_extra.all_new_textures()
         art_bees.all_textures()
+        swamp.art_swamp.all_textures()
         art.save_all(os.path.join(HERE, "art_export"))
         print("Saved every texture to the art_export/ folder.")
         return

@@ -85,6 +85,21 @@ The first boss rises on night 3 (or whatever "nights between bosses" is set to).
 it retreats at dawn - keeping every wound you gave it - and comes back the next night, and every night
 after, until it's beaten. Kill it, and the next boss comes 3 nights later.
 
+## The Mire (swamp biome)
+
+Somewhere out past the meadows (a different spot on every map) lies **the Mire**: dark bog ground,
+drooping willows and dead trees, and murky pools. Mud slows you down a little, and the pools a lot.
+- **Marsh Reeds** and **Glowcaps** (glowing mushrooms that light up at night) grow only here.
+- At night the **Drowned** climb out of the bog: soggy, slow, tough swamp zombies that drop reeds and glowcaps.
+- New crafts: **Reed Arrows** (2 reeds + 1 stone = 8 arrows), **Swamp Tonic** (campfire: +35 health,
+  +30 energy), **Mire Mask** (workbench, head slot: spore gas does a third of the damage and roots hold
+  you half as long), and **Thornroot Whip** (8 damage, very long reach, slows enemies) from the boss's Mire Heart.
+
+**THE MIRE LURKER** joins the boss rotation (after the Frost Wraith, before the Inferno Colossus):
+spore pods that burst into poison gas (purple circles), roots that burst up under you and hold you still
+(brown circles), and it sinks into the mud and erupts under someone (bubbling patch). It **heals while it's
+in the swamp**, so lure it out onto dry ground. The code lives in `swamp.py` (and the art in `art_swamp.py`).
+
 ## Pets
 
 Tame an animal by holding its favourite food and right-clicking it (wolf: meat, boar & rabbit: berries,

@@ -110,7 +110,10 @@ class UI:
         if self.view_layer != "over":
             return
         pulse = 0.5 + 0.5 * math.sin(self.flame_t * 14)
+        self.draw_swamp_ground()      # swamp.py draws its own hazards
         for h in self.hazards:
+            if h.kind in self.SWAMP_HAZARDS:
+                continue
             if h.tele > 0:
                 if h.kind == "line":
                     ex, ey = h.x + math.cos(h.a) * h.ln, h.y + math.sin(h.a) * h.ln
