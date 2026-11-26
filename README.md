@@ -67,8 +67,9 @@ That's it - run the game again and you have every update.
 Every game saves itself every morning, when you leave to the title screen, and when you close the
 window. Press **S** on the pause screen to save any time. To resume, pick **Load saved game** on the
 title screen, choose a save, then play it solo, host it for co-op, or play it split screen.
-Co-op friends get their own backpack, armor and pets back if they join with **the same name** as last
-time. Saves live in the `saves/` folder.
+Co-op friends get their own backpack, armor, pets and spot (surface or cave) back if they join with
+**the same name** as last time. Two friends with the same name each keep their own survivor (handed back
+in the order they rejoin). Saves live in the `saves/` folder.
 
 To delete a save: in **Load saved game**, highlight it and press **DELETE** (or **X** on a
 controller), or pick it and choose **Delete this save**. You'll be asked to confirm first.

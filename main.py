@@ -194,8 +194,7 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
         save_config(self.cfg)
 
     def on_close(self):
-        if self.can_save():
-            self.save_game()      # closing the window never loses your game
+        self.save_on_exit()       # closing the window never loses your game (even mid-cutscene)
         super().on_close()
 
     # ------------------------------------------------------------------ setup
@@ -1081,9 +1080,9 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
             self.say("BZZZ! The bees are angry - run, or swat them!", 2.5, to=p)
 
     def hit_enemy(self, z, dmg, by=None, fx=0.0, fy=0.0, w=None):
-        if isinstance(z, Boss) and z.state == "flee":
-            return                         # it's escaping into the dawn - no cheap last hits
         z.hp -= dmg
+        if isinstance(z, Boss) and z.state == "flee" and z.hp > 0:
+            self.boss_hp = z.hp            # running off at dawn: it still takes the wound home with it
         z.flash = 0.12
         L = self.L(z)
         if isinstance(z, Zombie):
@@ -1272,6 +1271,7 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
             if b.state != "flee":
                 continue
             b.state_t += dt
+            b.flash = max(0, b.flash - dt)
             dx, dy = b.charge_dir
             speed = b.speed * 2.4 * min(1.0, b.state_t / 0.6)     # turns, then bolts
             b.center_x = max(40, min(WORLD_SIZE - 40, b.center_x + dx * speed * dt))
@@ -1317,6 +1317,8 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
         if by:
             by.kills += 1
         self.on_boss_killed(b, by)
+        if b.state == "flee" and self.cut and self.cut.get("mode") == "retreat":
+            self.end_cutscene()            # shot down as it ran: no "it will be back" scene
         self.boss_num += 1
         self.boss_day = self.day + self.boss_gap
         self.boss_hp = None
@@ -2394,9 +2396,9 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
                         break
                     name = str(m.get("name", "Friend"))[:12] or "Friend"
                     p = self.add_player(name, conn=c)
-                    if self.me:
+                    if self.me and not p.restored:     # a returning survivor stays where they were saved
                         self.set_layer(p, self.me.layer, (self.view_pos()[0] + 40, self.view_pos()[1]))
-                        p.tp += 1      # tell their game where they are (and on which layer)
+                    p.tp += 1      # tell their game where they are (and on which layer)
                     c.send({"t": "world", "seed": self.seed, "pid": p.id})
                     self.sent_nodes_ver = self.sent_struct_ver = self.sent_storage_ver = -1
                     self.say(f"{name} joined the game!", 3)
@@ -2412,20 +2414,25 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
                 self.remove_player(p)
                 continue
             for m in p.conn.receive():
-                self.host_message(p, m)
+                try:
+                    self.host_message(p, m)
+                except (KeyError, ValueError, TypeError, AttributeError, OverflowError):
+                    pass       # a broken / modified client's message never takes the host down
         self.server.players = len(self.players)
 
     def host_message(self, p, m):
         t = m.get("t")
         if t == "in":
-            if m.get("tp") == p.tp and p.alive:
-                p.sprite.position = (float(m["x"]), float(m["y"]))
-            p.face = float(m.get("f", 0))
-            p.move = (float(m.get("mx", 0)), float(m.get("my", 0)))
+            size = self.layers[p.layer].size
+            x, y = net.num(m.get("x"), None, 0, size), net.num(m.get("y"), None, 0, size)
+            if m.get("tp") == p.tp and p.alive and x is not None and y is not None:
+                p.sprite.position = (x, y)
+            p.face = net.num(m.get("f"), p.face)
+            p.move = (net.num(m.get("mx"), 0, -1, 1), net.num(m.get("my"), 0, -1, 1))
             p.resting = bool(m.get("r"))
             p.attacking = bool(m.get("a")) and p.alive and not self.cut
             p.arriving = bool(m.get("ar"))
-            p.selected = max(0, min(HOTBAR_SLOTS - 1, int(m.get("s", 0))))
+            p.selected = net.whole(m.get("s"), p.selected, 0, HOTBAR_SLOTS - 1)
         elif t == "act" and self.state == "playing":
             self.do_action(p, m.get("a"), m)
 
@@ -2437,11 +2444,12 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
             return
         self.fx_layer = p.layer
         try:
+            size = self.layers[p.layer].size
             if a == "place":
-                p.selected = max(0, min(HOTBAR_SLOTS - 1, int(kw.get("s", p.selected))))
-                self.place(p, (float(kw["x"]), float(kw["y"])))
+                p.selected = net.whole(kw.get("s"), p.selected, 0, HOTBAR_SLOTS - 1)
+                self.place(p, (net.num(kw["x"], -1e6, -1e6, 1e6), net.num(kw["y"], -1e6, -1e6, 1e6)))
             elif a == "craft":
-                self.craft(p, int(kw.get("i", -1)))
+                self.craft(p, net.whole(kw.get("i"), -1))
             elif a == "use" and kw.get("item") in ITEMS:
                 self.consume(p, kw["item"])
             elif a == "quick":
@@ -2449,25 +2457,27 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
             elif a == "interact":
                 self.interact(p)
             elif a == "assign" and kw.get("item") in ITEMS:
-                self.assign_hotbar(p, kw["item"], kw.get("s"))
+                s = kw.get("s")
+                self.assign_hotbar(p, kw["item"], None if s is None else net.whole(s, p.selected, 0, HOTBAR_SLOTS - 1))
             elif a == "unequip" and kw.get("slot") in ARMOR_SLOTS:
                 self.unequip(p, kw["slot"])
             elif a == "deposit" and kw.get("item") in ITEMS:
-                self.deposit(p, kw["item"], kw.get("n", 1))
+                self.deposit(p, kw["item"], net.whole(kw.get("n", 1), 0, 0, 10 ** 9))
             elif a == "withdraw" and kw.get("item") in ITEMS:
-                self.withdraw(p, kw["item"], kw.get("n", 1))
+                self.withdraw(p, kw["item"], net.whole(kw.get("n", 1), 0, 0, 10 ** 9))
             elif a == "tame":
-                self.tame(p, int(kw.get("aid", -1)))
+                self.tame(p, net.whole(kw.get("aid"), -1))
             elif a == "pets":
                 self.command_pets(p)
             elif a in ("petmode", "petname", "petarmor", "petsall"):
                 self.pet_action(p, a, kw)      # pets.py: only ever touches your own pets
             elif a == "throw":
-                p.selected = max(0, min(HOTBAR_SLOTS - 1, int(kw.get("s", p.selected))))
+                p.selected = net.whole(kw.get("s"), p.selected, 0, HOTBAR_SLOTS - 1)
                 it = p.hotbar[p.selected]
-                if it and ITEMS[it]["kind"] == "throw":
-                    self.throw(p, it, float(kw["x"]), float(kw["y"]))
-        except (KeyError, ValueError, TypeError):
+                x, y = net.num(kw.get("x"), None, 0, size), net.num(kw.get("y"), None, 0, size)
+                if it and ITEMS[it]["kind"] == "throw" and x is not None and y is not None:
+                    self.throw(p, it, x, y)
+        except (KeyError, ValueError, TypeError, AttributeError, OverflowError):
             pass
 
     def send_snapshots(self):
@@ -2765,8 +2775,7 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
 
     def leave_game(self, note=""):
         summary = self.run_summary()      # progress.py: grab the stats before the world goes
-        if self.can_save():
-            self.save_game()      # autosave on the way out
+        self.save_on_exit()       # autosave on the way out
         self.local_end()
         if self.conn:
             self.conn.close()

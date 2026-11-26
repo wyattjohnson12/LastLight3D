@@ -7,6 +7,7 @@ Messages are one JSON object per line over TCP. Games announce themselves on the
 local network with a small UDP broadcast so the Join screen can find them.
 """
 import json
+import math
 import queue
 import socket
 import threading
@@ -27,6 +28,48 @@ def lan_ip():
         return "127.0.0.1"
     finally:
         s.close()
+
+
+def num(v, default=0.0, lo=None, hi=None):
+    """A number from someone else's message: a finite float clamped to [lo, hi], or default if it isn't one.
+    (A modified client can send NaN, Infinity, 1e999, strings, lists... none of that may crash the host.)"""
+    if isinstance(v, str):
+        return default
+    try:
+        v = float(v)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if not math.isfinite(v):
+        return default
+    if lo is not None:
+        v = max(lo, v)
+    if hi is not None:
+        v = min(hi, v)
+    return v
+
+
+def whole(v, default=0, lo=None, hi=None):
+    """Like num() but a whole number (rounded down)."""
+    v = num(v, None, lo, hi)
+    return default if v is None else int(v)
+
+
+def _no_constant(name):
+    return None          # NaN / Infinity / -Infinity aren't real JSON: treat them as missing
+
+
+def _finite(text):
+    v = float(text)
+    return v if math.isfinite(v) else None     # 1e999 parses as Infinity: treat it as missing too
+
+
+def decode(line):
+    """One message line -> dict, or None if it isn't a JSON object (garbage lines are skipped, not fatal)."""
+    try:
+        obj = json.loads(line, parse_constant=_no_constant, parse_float=_finite)
+    except (ValueError, RecursionError):
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
 def encode(obj):
@@ -55,8 +98,9 @@ class Conn:
                 buf += data
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
-                    if line:
-                        self.inbox.put(json.loads(line))
+                    msg = decode(line) if line else None
+                    if msg is not None:
+                        self.inbox.put(msg)
         except (OSError, ValueError):
             pass
         self.close()
