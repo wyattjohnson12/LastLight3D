@@ -116,7 +116,7 @@ ANIMALS = {
             "desc": "Honey bee: on WORK it buzzes between flowers and brings honey to your Storage Bins."},
 }
 ANIMAL_CAP = 26
-MAX_PETS = 3               # per player - in co-op every tamer has their own 3
+MAX_PETS = 8               # per player - in co-op every tamer has their own 8
 PET_ARMOR_SOAK = 0.15      # each point of pet armor: bites do 1 / (1 + armor * this) damage
 PET_NAMES = ["Biscuit", "Pepper", "Shadow", "Maple", "Scout", "Clover", "Ember", "Rocky", "Hazel", "Bandit",
              "Sunny", "Tank", "Juniper", "Pickle", "Ranger", "Willow", "Nugget", "Ash", "Koda", "Bramble"]
@@ -159,6 +159,9 @@ BOSSES = {
                  "drops": {"ember_heart": 2, "iron_ore": 6, "coal": 6}},
 }
 BOSS_ORDER = ["titan", "brood", "wraith", "colossus"]
+
+POISON_SECONDS = 4.0          # Brood Fang venom: how long a poisoned enemy keeps hurting (see venom.py)
+POISON_DPS = 3.0              # ...and how much damage a second (bosses too)
 
 # ----------------------------------------------------------------- traps & ranged weapons
 SPIKE_ZOMBIE_DAMAGE = 3       # every 0.6s while a zombie stands on spikes
@@ -225,10 +228,15 @@ ITEMS = {
                      "desc": "Fast mining. The only thing that can break crystal."},
     "iron_sword": {"name": "Iron Sword", "kind": "weapon", "damage": 6, "reach": 70, "cooldown": 0.4,
                    "desc": "6 damage, quick swings."},
-    "frost_spear": {"name": "Frost Spear", "kind": "weapon", "damage": 7, "reach": 104, "cooldown": 0.5,
-                    "slow": 1, "desc": "7 damage, huge reach. Chills enemies so they slow down."},
-    "titan_hammer": {"name": "Titan Hammer", "kind": "weapon", "damage": 12, "reach": 76, "cooldown": 0.9,
-                     "quake": 1, "desc": "12 damage to EVERYTHING around you. Slow but devastating."},
+    # boss weapons climb with the boss order (titan -> brood -> wraith -> mire -> colossus):
+    # damage per second 16 (hits everything around you) -> 22 (with venom) -> 24 -> 31 -> 38 (+ burning)
+    "titan_hammer": {"name": "Titan Hammer", "kind": "weapon", "damage": 14, "reach": 76, "cooldown": 0.85,
+                     "quake": 1, "desc": "14 damage to EVERYTHING around you. Slow but devastating."},
+    "brood_fang": {"name": "Brood Fang", "kind": "weapon", "damage": 5.5, "reach": 66, "cooldown": 0.28,
+                   "poison": 1, "desc": "5.5 damage, lightning-fast stabs. Venom: poisoned enemies (even bosses) "
+                                        "take 3 damage a second for 4s."},
+    "frost_spear": {"name": "Frost Spear", "kind": "weapon", "damage": 11, "reach": 104, "cooldown": 0.45,
+                    "slow": 1, "desc": "11 damage, huge reach. Chills enemies so they slow down."},
     "repair_hammer": {"name": "Repair Hammer", "kind": "tool", "damage": 1.5, "reach": 70, "cooldown": 0.5,
                       "repair": 1, "desc": "Hit a damaged building to fix it. Costs part of its recipe - the more "
                                            "damage, the more it costs."},
@@ -236,8 +244,8 @@ ITEMS = {
                 "desc": "Shoots where you aim, 5 damage. Uses Arrows from your backpack. Keep your distance!"},
     "fire_pot": {"name": "Fire Pot", "kind": "throw", "damage": 18,
                  "desc": "Right-click to throw where you aim: bursts into flame, 18 damage + burning. Won't hurt friends."},
-    "ember_blade": {"name": "Ember Blade", "kind": "weapon", "damage": 9, "reach": 74, "cooldown": 0.36,
-                    "burn": 1, "desc": "9 damage and sets enemies on fire."},
+    "ember_blade": {"name": "Ember Blade", "kind": "weapon", "damage": 13, "reach": 76, "cooldown": 0.34,
+                    "burn": 1, "desc": "13 damage, quick swings, and sets enemies on fire. The best blade there is."},
     # --- armor & clothing (slot: head | body | cloak)
     "leather_cap":   {"name": "Leather Cap", "kind": "armor", "slot": "head", "armor": 1, "warmth": 1,
                       "desc": "Armor 1, warmth 1."},
@@ -249,16 +257,16 @@ ITEMS = {
                       "desc": "Armor 3."},
     "iron_armor":    {"name": "Iron Armor", "kind": "armor", "slot": "body", "armor": 5, "warmth": 0,
                       "desc": "Armor 5. Cold metal - wear a cloak."},
-    "chitin_armor":  {"name": "Chitin Armor", "kind": "armor", "slot": "body", "armor": 7, "warmth": 2,
-                      "desc": "Armor 7, warmth 2."},
-    "frost_cloak":   {"name": "Frost Cloak", "kind": "armor", "slot": "cloak", "armor": 2, "warmth": 14,
-                      "desc": "Armor 2, warmth 14. You'll never be cold again."},
+    "chitin_armor":  {"name": "Chitin Armor", "kind": "armor", "slot": "body", "armor": 12, "warmth": 3, "speed": 0.1,
+                      "desc": "Armor 12, warmth 3. Light as a shell: you move 10% faster. The best body armor."},
+    "frost_cloak":   {"name": "Frost Cloak", "kind": "armor", "slot": "cloak", "armor": 4, "warmth": 14,
+                      "desc": "Armor 4, warmth 14. You'll never be cold again."},
     "pet_leather_armor": {"name": "Leather Pet Armor", "kind": "petarmor", "armor": 3,
                           "desc": "Pet armor 3: bites hurt your pet about a third less. Put it on in the Pets menu (P)."},
     "pet_iron_armor": {"name": "Iron Pet Armor", "kind": "petarmor", "armor": 6,
                        "desc": "Pet armor 6: bites do about half damage. Lost if the pet dies. Pets menu (P)."},
     "titan_plate":   {"name": "Titan Plate", "kind": "armor", "slot": "body", "armor": 10, "warmth": 2,
-                      "desc": "Armor 10, warmth 2. The best protection there is."},
+                      "desc": "Armor 10, warmth 2. Heavy stone plate - the Brood Mother's chitin is even better."},
     # --- buildings
     "wood_wall":  {"name": "Wood Wall", "kind": "build", "hp": 45, "desc": "Blocks zombies. Right-click to place."},
     "stone_wall": {"name": "Stone Wall", "kind": "build", "hp": 120, "desc": "Tough wall."},
@@ -320,6 +328,7 @@ CRAFT_TABS = {
         R("iron_axe", {"wood": 2, "iron_ingot": 3}, "workbench"),
         R("iron_pickaxe", {"wood": 2, "iron_ingot": 3}, "workbench"),
         R("iron_sword", {"wood": 1, "iron_ingot": 4, "leather": 1}, "workbench"),
+        R("brood_fang", {"chitin": 2, "iron_ingot": 2, "leather": 1}, "workbench"),
         R("frost_spear", {"wood": 3, "iron_ingot": 2, "frost_shard": 2}, "workbench"),
         R("bow", {"wood": 6, "fiber": 5}, "workbench"),
         R("repair_hammer", {"wood": 3, "stone": 2}),

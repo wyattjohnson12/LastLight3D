@@ -564,6 +564,23 @@ def _frost_spear_icon(img):
     _poly(img, [(32, 16), (47, 24), (32, 32), (36, 24)], (170, 225, 255, 255), (80, 140, 200, 255))
 
 
+def _fang_icon(img):
+    """Brood Fang: a curved chitin fang on a wrapped grip, venom glowing on the tip."""
+    g = _canvas(48, 48)
+    _circle(g, 40, 22, 7, (150, 255, 90, 150))
+    img.alpha_composite(g.filter(ImageFilter.GaussianBlur(3 * S)))
+    _rrect(img, (3, 21, 15, 28), 3, (96, 66, 38, 255), (54, 36, 20, 255))         # grip
+    for x in (6, 9, 12):
+        _line(img, [(x, 21), (x + 1, 28)], (150, 116, 70, 255), 1)              # wrapping
+    _poly(img, [(14, 17), (19, 18), (19, 31), (14, 32)], (104, 146, 58, 255), (50, 70, 30, 255), 1)   # chitin guard
+    blade = [(19, 20), (30, 17), (40, 15), (46, 20), (40, 21), (30, 25), (19, 28)]
+    _poly(img, blade, (226, 222, 196, 255), (110, 104, 80, 255), 1)               # the fang, curving up
+    _line(img, [(21, 23), (31, 20), (40, 18)], (255, 255, 240, 170), 1)          # shine
+    _line(img, [(36, 19), (44, 20)], (150, 240, 80, 255), 1.6)                   # venom on the tip
+    _circle(img, 42, 25, 1.8, (150, 240, 80, 255))                               # ...dripping
+    _circle(img, 41, 30, 1.2, (150, 240, 80, 200))
+
+
 def _hammer_icon(img):
     _line(img, [(4, 26), (34, 24)], (90, 64, 40, 255), 5)
     _rrect(img, (28, 8, 46, 40), 4, (118, 104, 88, 255), (60, 52, 44, 255))
@@ -699,7 +716,7 @@ art.ICON_MAKERS.update({
     "torch": _torch_icon, "medkit": _medkit_icon,
     "iron_axe": _tool_icon((190, 194, 204), "axe"), "iron_pickaxe": _tool_icon((190, 194, 204), "pick"),
     "iron_sword": _sword_icon((200, 204, 214)), "ember_blade": _sword_icon((240, 120, 50), (255, 120, 30)),
-    "frost_spear": _frost_spear_icon, "titan_hammer": _hammer_icon,
+    "frost_spear": _frost_spear_icon, "titan_hammer": _hammer_icon, "brood_fang": _fang_icon,
     "leather_cap": _helmet_icon((150, 100, 56)), "iron_helmet": _helmet_icon((170, 176, 188)),
     "leather_tunic": _body_icon((150, 100, 56), (210, 180, 120)),
     "iron_armor": _body_icon((160, 166, 178), (220, 224, 232)),

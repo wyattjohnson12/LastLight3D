@@ -46,11 +46,11 @@ ITEMS.update({
     "mire_heart": {"name": "Mire Heart", "kind": "material", "desc": "Dropped by the Mire Lurker. It still beats, slowly."},
     "swamp_tonic": {"name": "Swamp Tonic", "kind": "food", "health": 35, "energy": 30, "thirst": 15,
                     "desc": "Glowcap brew from a campfire. +35 health, +30 energy, +15 thirst."},
-    "mire_mask": {"name": "Mire Mask", "kind": "armor", "slot": "head", "armor": 2, "warmth": 1, "toxin": 1,
-                  "desc": "Armor 2, warmth 1. Filters the air: spore gas does a third of the damage, "
+    "mire_mask": {"name": "Mire Mask", "kind": "armor", "slot": "head", "armor": 4, "warmth": 1, "toxin": 1,
+                  "desc": "Armor 4, warmth 1 (the best helmet). Filters the air: spore gas does a third of the damage, "
                           "and roots hold you half as long."},
-    "thornroot_whip": {"name": "Thornroot Whip", "kind": "weapon", "damage": 8, "reach": 100, "cooldown": 0.45,
-                       "slow": 1, "desc": "8 damage, very long reach. Thorny roots tangle enemies so they slow down."},
+    "thornroot_whip": {"name": "Thornroot Whip", "kind": "weapon", "damage": 13, "reach": 100, "cooldown": 0.42,
+                       "slow": 1, "desc": "13 damage, very long reach. Thorny roots tangle enemies so they slow down."},
 })
 NODES.update({
     "reeds": {"gives": "reeds", "hp": 2, "regrow": 70},
