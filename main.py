@@ -22,6 +22,7 @@ import sys
 import arcade
 
 import swamp  # noqa: F401  (first: adds the Mire's items, recipes and boss before ui.py reads them)
+import base  # noqa: F401  (also early: adds the Base Flag recipe before ui.py reads the tabs)
 import art
 import art_bees
 import art_defenses
@@ -139,7 +140,7 @@ class Survivor:
 
 
 # =========================================================================== game
-class LastLight(firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
+class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
                 progress.Progress, weather.Weather, defenses.Defenses, swamp.Swamp, ui.UI, arcade.Window):
     def __init__(self):
         super().__init__(W, H, SCREEN_TITLE)
@@ -255,6 +256,7 @@ class LastLight(firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, op
         self.fast_forward = False
         self.animal_t = 0.0
         self.weather_setup()       # weather.py: seasons & weather
+        self.base_setup()          # base.py: base areas, cleared spots, nodes turning up elsewhere
 
     def add_player(self, name, conn=None, pid=None):
         if pid is None:
@@ -866,6 +868,10 @@ class LastLight(firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, op
         if n.kind == "tree":
             n.texture = art.tree(n.variant) if state == "full" else art.stump()
             n.angle = n.base_angle if state == "full" else 0
+            if state != "full" and L.solid in n.sprite_lists:      # a stump: walk over it, build on it
+                L.solid.remove(n)
+            elif state == "full" and L.solid not in n.sprite_lists:
+                L.solid.append(n)
         elif n.kind == "bush":
             n.texture = art.bush(state == "full")
         elif n.kind == "hive":   # never solid; hidden while its tree is a stump
@@ -911,6 +917,7 @@ class LastLight(firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, op
                 got[give] += 2
                 self.set_node_state(n, "stump")
                 n.timer = TREE_REGROW
+                self.node_used_up(n)     # base.py: it grows back somewhere else, never here
                 if n.hive:   # the hive falls with the tree
                     if n.hive.state == "full":
                         got["honey"] = HIVE_HONEY
@@ -920,7 +927,7 @@ class LastLight(firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, op
                 if n.kind in ("iron", "coal"):
                     got["stone"] = 1
                 self.set_node_state(n, "gone")
-                self.regrow.append([NODES[n.kind]["regrow"], n])
+                self.node_used_up(n)     # base.py: it turns up again somewhere else, never here
         return got
 
     def attack(self, p):
@@ -1522,7 +1529,7 @@ class LastLight(firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, op
                 self.cave.spawn_timer = random.uniform(2.5, 5.0) / n_cave
 
     def base_spot(self):
-        for kind in ("hut", "storage", "workbench"):
+        for kind in ("base_flag", "hut", "storage", "workbench"):
             for s in self.structs.values():
                 if s.kind == kind and s.layer == "over":
                     return (s.center_x, s.center_y - 70)
@@ -1787,7 +1794,7 @@ class LastLight(firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, op
             return self.spawn_bee(alive)
         for _ in range(20):
             x, y = random.uniform(150, WORLD_SIZE - 150), random.uniform(150, WORLD_SIZE - 150)
-            if any(dist((x, y), p.pos) < 550 for p in alive):
+            if any(dist((x, y), p.pos) < 550 for p in alive) or self.in_base((x, y)):
                 continue
             a = Animal(kind, x, y, self.next_aid)
             if arcade.check_for_collision_with_lists(a, [self.over.solid, self.over.huts]):
@@ -2261,21 +2268,8 @@ class LastLight(firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, op
         return []
 
     def _update_world(self, dt):
-        ppl = [(p.pos, p.layer) for p in self.players.values()]
-
-        def far(n):
-            return all(dist(n.position, q) > 150 for q, ly in ppl if ly == n.layer)
-
         for n in self.over.trees:
-            if n.state == "stump":
-                n.timer -= dt
-                if n.timer <= 0 and far(n):
-                    n.hp = TREE_HP
-                    self.set_node_state(n, "full")
-                    if n.hive:   # the bees move back in, the honey takes a while
-                        self.set_node_state(n.hive, "empty")
-                        n.hive.timer = HIVE_REGROW
-            elif n.kind == "hive" and n.state == "empty":
+            if n.kind == "hive" and n.state == "empty":
                 n.timer -= dt
                 if n.timer <= 0:
                     self.set_node_state(n, "full")
@@ -2284,15 +2278,7 @@ class LastLight(firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, op
                 n.timer -= dt
                 if n.timer <= 0:
                     self.set_node_state(n, "full")
-        for item in list(self.regrow):
-            item[0] -= dt
-            n = item[1]
-            L = self.layers[n.layer]
-            if item[0] <= 0 and far(n) and not arcade.check_for_collision_with_lists(n, [L.zombies,
-                                                                                          self.player_list]):
-                n.hp = NODES[n.kind]["hp"]
-                self.set_node_state(n, "full")
-                self.regrow.remove(item)
+        self.update_respawns(dt)     # base.py: used-up nodes turn up again somewhere new (never in a base)
 
     def _update_visuals(self, dt):
         view = self.view_pos()
@@ -2508,6 +2494,9 @@ class LastLight(firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, op
         }
         if self.nodes_ver != self.sent_nodes_ver:
             common["n"] = "".join(NODE_CODE[n.state] for n in self.nodes)
+            moves = self.node_moves_rows(force=self.sent_nodes_ver == -1)   # base.py: nodes that grew elsewhere
+            if moves is not None:
+                common["nm"] = moves
             self.sent_nodes_ver = self.nodes_ver
         if self.struct_ver != self.sent_struct_ver:
             common["st"] = [[s.sid, s.kind, s.center_x, s.center_y, round(s.hp, 1), li(s.layer), int(s.lit)]
@@ -2594,6 +2583,8 @@ class LastLight(firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, op
             s = Shot(kind, x, y, vx, vy, T, layer=LAYERS[ly])
             s.t = t
             self.shots.append(s)
+        if "nm" in m:
+            self.apply_node_moves(m["nm"])     # base.py: before the states, so regrown trees get the right look
         if "n" in m:
             for n, ch in zip(self.nodes, m["n"]):
                 self.set_node_state(n, CODE_NODE.get(ch, "full"))

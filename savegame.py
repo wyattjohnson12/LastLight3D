@@ -189,6 +189,7 @@ class SaveGame:
             "nodes": [[n.idx, NODE_CODE[n.state], round(n.timer, 1), n.hp] for n in self.nodes
                       if n.state != "full" or n.hp != NODES[n.kind]["hp"]],
             "regrow": [[round(t, 1), n.idx] for t, n in self.regrow],
+            "base": self.base_save(),         # base.py: nodes that grew back elsewhere, cleared spots
             "structs": [[s.kind, s.center_x, s.center_y, s.layer, round(s.hp, 1), int(s.lit), round(s.out_t, 1)]
                         for s in self.structs.values()],
             "storage": self.storage,
@@ -216,12 +217,14 @@ class SaveGame:
         d = list(data["meta"].get("difficulty") or default)
         gap = d[3] if len(d) > 3 else BOSS_EVERY          # older saves didn't have this setting
         self.difficulty = (d[0], int(d[1]), int(d[2]), int(gap))
+        self.base_load(data.get("base"))      # base.py (older saves: nothing moved yet)
         for idx, code, timer, hp in data.get("nodes", []):
             if 0 <= idx < len(self.nodes) and code in CODE_NODE:
                 n = self.nodes[idx]
                 self.set_node_state(n, CODE_NODE[code])
                 n.timer, n.hp = float(timer), hp
         self.regrow = [[float(t), self.nodes[i]] for t, i in data.get("regrow", []) if 0 <= i < len(self.nodes)]
+        self.fix_respawn_queue()              # base.py: old saves' stumps now grow back somewhere else
         for kind, x, y, layer, hp, lit, out_t in data.get("structs", []):
             if kind in ITEMS and layer in LAYERS:
                 s = self.add_structure(kind, x, y, layer=layer)
