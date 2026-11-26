@@ -7,8 +7,11 @@ collisions, AI, crafting and networking are untouched. Only the drawing is diffe
   * The camera sits behind and above the survivor and looks down at an angle, with real perspective.
   * The map's (x, y) becomes the ground plane; height is a new third axis (z).
   * Flat things (grass, ponds, traps, light pools) lie on the ground.
-  * Everything that stands up (trees, rocks, survivors, zombies, animals, bosses, benches...) is a
-    "cut-out" - the same painted picture, stood upright and turned to face the camera.
+  * Trees, rocks, ores, bushes, campfires, braziers, benches, bins, turret pedestals and huts are small
+    low-poly 3D shapes with their painted picture draped over them from above (shapes3d.py).
+  * Everything else that stands up (survivors, zombies, animals, bosses, lanterns, gates...) is a
+    "cut-out" - the same painted picture, stood upright and turned to face the camera. In first
+    person, animals, bosses, survivors and zombies become simple 3D bodies instead.
   * Walls (cave walls and the walls you build) are real 3D blocks.
 
 Two small custom shaders do the work, fed by the same arcade SpriteLists the 2D game already uses,
@@ -19,12 +22,11 @@ from array import array
 
 import arcade
 from arcade.gl import BufferDescription
-from PIL import ImageDraw
 from pyglet import gl
 from pyglet.math import Mat4, Vec3
 
-import art
 import fx3d
+import shapes3d
 import ui
 from settings import *
 
@@ -34,7 +36,9 @@ TAN = math.tan(math.radians(FOV) / 2)
 UP = 1 / math.cos(PITCH)       # stretch upright cut-outs so they look as tall as in the 2D game
 WALL_KINDS = ("wood_wall", "stone_wall", "iron_wall")
 WALL_SIDES = {"wood_wall": (118, 80, 46), "stone_wall": (128, 128, 132), "iron_wall": (150, 156, 168)}
-TRUNK_LIFT = 34                # how high tree canopies float (on their trunks)
+TRUNK_LIFT = 34                # sprite.depth of a standing tree (stumps are 0) - shapes3d picks the shape by it
+HIVE_LIFT = 16                 # beehives hang under the canopy
+MESH_BUILDS = ("campfire", "brazier", "workbench", "storage", "arrow_turret")
 NUDGE_FLAG = 1000.0            # sprite.depth >= this means "draw a bit in front" (beehives in trees)
 
 # =========================================================================== shaders
@@ -199,24 +203,6 @@ void main() { f_color = v_col; }
 """
 
 
-def _trunk_img():
-    w, h = 22, 58
-    img = art._canvas(w, h)
-    d = ImageDraw.Draw(img)
-    s = art.S
-    d.polygon([(5 * s, h * s), (8 * s, 0), (14 * s, 0), (17 * s, h * s)], fill=(98, 66, 40, 255),
-              outline=(54, 36, 22, 255), width=int(1.4 * s))
-    for k in range(5):   # bark
-        y = (8 + k * 10) * s
-        d.line([(9 * s, y), (12 * s, y + 6 * s)], fill=(70, 46, 28, 255), width=s)
-    d.polygon([(2 * s, h * s), (6 * s, (h - 6) * s), (16 * s, (h - 6) * s), (20 * s, h * s)], fill=(88, 58, 36, 255))
-    return art._finish(img, w, h)
-
-
-def trunk():
-    return art._tex("trunk3d", _trunk_img)
-
-
 # =========================================================================== the mixin
 class View3D(fx3d.FX3D):
     """Mixed into the game window. Replaces the flat camera with a tilted 3D one."""
@@ -309,6 +295,12 @@ class View3D(fx3d.FX3D):
         bill["face_right"] = (1.0, 0.0)
         bill["shade"] = 1.0
         self._progs3d = (flat, bill, ctx.program(vertex_shader=BOX_VS, fragment_shader=BOX_FS))
+        geo, frag = shapes3d.program_sources(lib)
+        mesh = self._mesh3d = ctx.program(vertex_shader=vs, geometry_shader=geo, fragment_shader=frag)
+        mesh["sprite_texture"] = 0
+        mesh["uv_texture"] = 1
+        mesh["inflate"] = 1.0
+        self._kinds3d = {}
         self._ghost3d = arcade.SpriteList()
         self._wall_sig = {}
         self._wall_geo = {}
@@ -338,6 +330,71 @@ class View3D(fx3d.FX3D):
             self._draw_list(lst, self._progs3d[1], blend, mode=1)
         else:
             self._draw_list(lst, self._progs3d[1], blend, lift=float(lift), nudge=float(nudge), alpha_cut=float(cut))
+
+    def mesh(self, lst, shape, cut=None, inflate=1.0, blend=None):
+        """Draw every sprite in `lst` as the 3D shape `shape` (shapes3d.SHAPES) with its picture draped on."""
+        if not len(lst):
+            return
+        sh = shapes3d.SHAPES[shape]
+        p = self._mesh3d
+        p["rings"] = sh.rings
+        p["nrings"] = sh.nrings
+        p["alt_start"] = sh.alt_start
+        p["alt_below"] = sh.alt_below
+        p["breaks"] = sh.breaks
+        p["segs"] = sh.segs
+        p["phase"] = sh.phase
+        p["foot"] = sh.foot
+        p["solid"] = sh.solid
+        p["jitter"] = sh.jitter
+        p["inflate"] = float(inflate)
+        p["sun"] = self._progs3d[1]["sun"]
+        p["alpha_cut"] = float(sh.cut if cut is None else cut)
+        lst._init_deferred()
+        old = lst.data.program
+        lst.data.program = p
+        p["band_per"] = sh.band_per
+        try:
+            for i in range(sh.passes):
+                p["pass_id"] = i
+                lst.draw(blend_function=blend)
+        finally:
+            lst.data.program = old
+
+    def _by_kind(self, lst, ver=0):
+        """The sprites of `lst` split into one SpriteList per .kind (rebuilt only when `lst` changes).
+        The sprites stay in `lst` too, so the game never notices."""
+        got = self._kinds3d.get(id(lst))
+        sig = (len(lst), ver)
+        if got is None or got[0] != sig or got[1] is not lst:
+            if got is not None:
+                for sub in got[2].values():
+                    sub.clear()
+            groups = {}
+            for s in lst:
+                kind = getattr(s, "kind", "")
+                if kind not in groups:
+                    groups[kind] = arcade.SpriteList()
+                groups[kind].append(s)
+                lift = shapes3d.FLAME_DEPTH.get(kind)
+                if lift is not None and getattr(s, "extras", None):
+                    s.extras[0].depth = lift          # its flame burns on top of the 3D shape
+            got = self._kinds3d[id(lst)] = (sig, lst, groups)
+        return got[2]
+
+    def draw_kinds(self, lst, ver=0, shaped=None):
+        """Draw a mixed list: kinds with a 3D shape as shapes, the rest as cut-outs."""
+        for kind, sub in self._by_kind(lst, ver).items():
+            if not len(sub):
+                continue
+            sh = shapes3d.SHAPES.get(kind) if shaped is None or kind in shaped else None
+            if sh is None:
+                self.stand(sub)
+                continue
+            self.mesh(sub, kind)
+            if sh.card_lift is not None:        # e.g. the turret's crossbow stands on its pedestal
+                s0 = sub[0]
+                self.stand(sub, lift=min(s0.width, s0.height) / 2 * sh.card_lift / UP)
 
     # ------------------------------------------------------------------ 3D blocks
     def _box(self, out, x0, y0, x1, y1, h, col, faces):
@@ -405,49 +462,36 @@ class View3D(fx3d.FX3D):
             self._wall_geo[L.name] = self._geo(out)
         return self._wall_geo.get(L.name)
 
-    # ------------------------------------------------------------------ trees get trunks
+    # ------------------------------------------------------------------ trees
     def _trees(self, L, view):
+        """Tell the tree shapes which trees are standing (depth) and keep trees from hiding you."""
         if L.name != "over":
-            return None
-        trunks = getattr(L, "trunks3d", None)
-        if trunks is None:
-            trunks = L.trunks3d = arcade.SpriteList()
-            L.trunk_of = {}
-            tex = trunk()
-            for n in L.trees:
-                if n.kind == "tree":
-                    t = arcade.Sprite(tex, center_x=n.base[0], center_y=n.base[1])
-                    L.trunk_of[id(n)] = t
-                    trunks.append(t)
+            return
         vx, vy = view
+        fp = self.fp_on()
         for n in L.trees:
             full = n.state == "full"
             if n.kind == "tree":
-                t = L.trunk_of.get(id(n))
                 lift = TRUNK_LIFT if full else 0
                 if n.depth != lift:
                     n.depth = lift
-                if t is not None:
-                    if t.center_x != n.center_x:
-                        t.center_x = n.center_x
-                    t.visible = full and n.visible
-                if full and 0 < vy - n.center_y < 170 and abs(n.center_x - vx) < 70:
+                if fp:
+                    if n.alpha != 255:
+                        n.alpha = 255      # from your own eyes nothing needs to be see-through
+                elif full and 0 < vy - n.center_y < 170 and abs(n.center_x - vx) < 70:
                     n.alpha = 120          # don't let a tree in front hide you
-                if t is not None:
-                    t.alpha = n.alpha
-            else:   # beehive: up in the canopy, drawn just in front of its tree
+            else:   # beehive: hangs under the canopy, drawn just in front of its tree
                 up = n.tree is not None and n.tree.state == "full"
-                want = NUDGE_FLAG + (TRUNK_LIFT + 18 if up else 0)
+                want = NUDGE_FLAG + (HIVE_LIFT if up else 0)
                 if n.depth != want:
                     n.depth = want
-        return trunks
 
     # ------------------------------------------------------------------ the frame
     def draw_world_3d(self, L, vl):
         self._init3d()
         ctx = self.ctx
         view = self.view_pos()
-        trunks = self._trees(L, view)
+        self._trees(L, view)
         cave_geo = self._cave_walls(L) if vl == "cave" else None
         built_geo = self._built_walls(L)
         self.fx_tick()               # fx3d.py: particles move once per frame (not once per split view)
@@ -495,25 +539,32 @@ class View3D(fx3d.FX3D):
             self.flat(L.builds, BUILD_WALL_HEIGHT, boxes=True)
         if vl == "cave":
             self.stand(L.exits)
-        self.stand(L.bushes)
-        self.stand(L.rocks)
-        self.stand(L.builds)
+        self.draw_kinds(L.bushes)
+        self.draw_kinds(L.rocks)
+        self.draw_kinds(L.builds, getattr(self, "struct_ver", 0), MESH_BUILDS)
         self.stand(L.flames, lift=2, nudge=2, cut=0.05)
-        self.stand(L.animals)
-        self.stand(self.cloak_list, nudge=-1)
-        self.stand(self.player_list)
-        self.stand(self.gear_list, nudge=1)
-        self.stand(self.held_list, lift=8, nudge=2)
-        self.stand(L.zombies)
-        self.stand(L.bosses)
+        if fp:          # from eye level the painted-from-above creatures need real bodies
+            self.mesh(L.animals, "body")
+            self.mesh(self.cloak_list, "person", inflate=1.08)
+            self.mesh(self.player_list, "person")
+            self.mesh(self.gear_list, "person", inflate=1.04)
+            self.stand(self.held_list, lift=8, nudge=2)
+            self.mesh(L.zombies, "person")
+            self.mesh(L.bosses, "boss")
+        else:
+            self.stand(L.animals)
+            self.stand(self.cloak_list, nudge=-1)
+            self.stand(self.player_list)
+            self.stand(self.gear_list, nudge=1)
+            self.stand(self.held_list, lift=8, nudge=2)
+            self.stand(L.zombies)
+            self.stand(L.bosses)
         my_hut = self.me.in_hut if self.me else None
         for hsp in L.huts:
             inside = hsp is my_hut or any(p.in_hut is hsp for p in self.players.values())
             hsp.alpha = 110 if inside else 255
-        self.stand(L.huts)
-        if trunks is not None:
-            self.stand(trunks, nudge=-1)
-        self.stand(L.trees)
+        self.mesh(L.huts, "hut")
+        self.draw_kinds(L.trees)
         if fp:
             self.fp_hide_me(False)
 
@@ -526,7 +577,14 @@ class View3D(fx3d.FX3D):
                 ghost.color = (150, 255, 150) if ok else (255, 110, 110)
                 self._ghost3d.clear()
                 self._ghost3d.append(ghost)
-                self.stand(self._ghost3d, cut=0.05)
+                if item in MESH_BUILDS or item == "hut":
+                    self.mesh(self._ghost3d, item, cut=0.05)
+                    sh = shapes3d.SHAPES[item]
+                    if sh.card_lift is not None:
+                        self.stand(self._ghost3d, cut=0.05,
+                                   lift=min(ghost.width, ghost.height) / 2 * sh.card_lift / UP)
+                else:
+                    self.stand(self._ghost3d, cut=0.05)
                 self._ghost3d.clear()
                 self.draw_defense_preview(item, ghost)   # defenses.py: turret / lantern reach
             ctx.disable(ctx.DEPTH_TEST)
@@ -555,7 +613,10 @@ class View3D(fx3d.FX3D):
             self.stand(L.flames, lift=2, nudge=2, cut=0.05)
             for e in L.eyes:
                 e.alpha = int(255 * dk)
-            self.stand(L.eyes, lift=16, nudge=3, cut=0.0, blend=blend)
+            if fp:      # on the zombie's 3D head, just in front of its face
+                self.stand(L.eyes, lift=40, nudge=16, cut=0.0, blend=blend)
+            else:
+                self.stand(L.eyes, lift=16, nudge=3, cut=0.0, blend=blend)
             ctx.disable(ctx.DEPTH_TEST)
             for p in self.players.values():   # teammates carry a little lantern so you can find them
                 if p is not self.me and p.alive and p.layer == vl:
