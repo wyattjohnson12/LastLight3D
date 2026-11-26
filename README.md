@@ -129,6 +129,18 @@ The season and the weather are shown under the day clock.
 
 All the numbers are in `settings.py`, and the code is in `weather.py`.
 
+## Your base and the Base Flag
+
+Every building you place claims the ground around it as **base**. Trees, rocks, ores, reeds and glowcaps you
+use up are gone for good from that spot (a chopped tree leaves a stump you can walk over and build on). So the
+world doesn't run dry, they turn up again later somewhere else in the wild - never inside a base, and never
+next to a building, a survivor or a spot someone cleared. Berry bushes and beehives still fill up again in place.
+
+Craft a **Base Flag** (Supplies tab: 4 wood, 6 fiber, 2 berries) and plant it to mark your base: a tall red
+banner with a beam of light over it, a gold **BASE 12m** tag above it, and an arrow on the edge of the screen
+pointing home when it's out of sight. You respawn at the flag. There's only one - planting a new one moves
+your base (the old flag goes back in your backpack). The code lives in `base.py` (art in `art_flag.py`).
+
 ## Base defenses
 
 Three buildings in the **Build** tab help you hold your base:
