@@ -396,11 +396,55 @@ class UI:
         order = list(ITEMS)
         return sorted(self.me.inv.items(), key=lambda kv: order.index(kv[0]))
 
-    def inv_slots(self):
+    # --- item grids that scroll a row at a time (the backpack has no size limit, so it can be long)
+    def grid_first(self, key, total, cols, rows):
+        """First visible row of a scrolling grid (clamped)."""
+        if not hasattr(self, "_grid_scroll"):
+            self._grid_scroll = {}
+        most = max(0, -(-total // cols) - rows)
+        v = max(0, min(most, self._grid_scroll.get(key, 0)))
+        self._grid_scroll[key] = v
+        return v
+
+    def grid_scroll(self, key, steps, total, cols, rows):
+        self.grid_first(key, total, cols, rows)
+        self._grid_scroll[key] += steps
+        self.grid_first(key, total, cols, rows)
+
+    def draw_grid_bar(self, key, x, top, total, cols, rows, tag):
+        """Scrollbar beside a grid with more items than fit, plus 'N more above / below' notes."""
+        total_rows = -(-total // cols)
+        if total_rows <= rows:
+            return
+        first = self.grid_first(key, total, cols, rows)
+        pitch = self.SLOT + self.GAP
+        bot = top - rows * pitch
+        span = top - bot
+        th = max(20, span * rows / total_rows)
+        t0 = top - (span - th) * first / (total_rows - rows)
+        arcade.draw_lrbt_rectangle_filled(x, x + 7, bot, top, (34, 40, 48, 220))
+        arcade.draw_lrbt_rectangle_filled(x, x + 7, t0 - th, t0, (255, 214, 140, 210))
+        above = first * cols
+        below = max(0, total - (first + rows) * cols)
+        how = "right stick" if self.use_pad else "mouse wheel"
+        self.txt(f"gm{tag}a", f"{above} more above" if above else "", x + 7, top + 3, (255, 214, 140), 10,
+                 anchor_x="right")
+        self.txt(f"gm{tag}b", f"{below} more below - scroll ({how})" if below else "", x + 7, bot - 12,
+                 (255, 214, 140), 10, anchor_x="right")
+
+    def inv_grid_top(self):
         l, b, pw, ph = self.inv_layout()
-        top = b + ph - 56
-        items = self.inv_items()[:self.INV_COLS * self.INV_ROWS]
-        return [(it, self.grid_rect(l + 24, top, i, self.INV_COLS)) for i, (it, _) in enumerate(items)]
+        return b + ph - 56
+
+    def inv_slots(self):
+        """The backpack items you can see right now: [(item, rect), ...] (scrolled)."""
+        l, b, pw, ph = self.inv_layout()
+        top = self.inv_grid_top()
+        items = self.inv_items()
+        cols, rows = self.INV_COLS, self.INV_ROWS
+        first = self.grid_first("inv", len(items), cols, rows) * cols
+        shown = items[first:first + cols * rows]
+        return [(it, self.grid_rect(l + 24, top, i, cols)) for i, (it, _) in enumerate(shown)]
 
     def worn_slots(self):
         l, b, pw, ph = self.inv_layout()
@@ -412,15 +456,89 @@ class UI:
         x0 = l + 410
         return [(i, (x0 + i * 136, x0 + i * 136 + 130, b + ph - 82, b + ph - 54)) for i in range(len(TAB_NAMES))]
 
+    CRAFT_ROWS, ROW_PITCH = 12, 36      # recipes shown at once; a longer tab scrolls
+
+    def craft_scroll(self, tab=None):
+        """How many recipes of this tab are scrolled off the top (each tab remembers its own)."""
+        tab = self.craft_tab if tab is None else tab
+        if not hasattr(self, "_craft_scroll"):
+            self._craft_scroll = {}
+        most = max(0, len(CRAFT_TABS[TAB_NAMES[tab]]) - self.CRAFT_ROWS)
+        return max(0, min(most, self._craft_scroll.get(tab, 0)))
+
+    def scroll_crafting(self, steps):
+        if not hasattr(self, "_craft_scroll"):
+            self._craft_scroll = {}
+        self._craft_scroll[self.craft_tab] = self.craft_scroll() + steps
+        self._craft_scroll[self.craft_tab] = self.craft_scroll()     # clamp
+
     def recipe_rows(self):
+        """The recipes you can see right now: [(index into RECIPES, recipe, rect), ...]."""
         l, b, pw, ph = self.inv_layout()
         name = TAB_NAMES[self.craft_tab]
         x = l + 410
+        first = self.craft_scroll()
         rows = []
-        for i, rec in enumerate(CRAFT_TABS[name]):
-            y = b + ph - 112 - i * 36
-            rows.append((TAB_OFFSET[name] + i, rec, (x, x + 548, y - 16, y + 16)))
+        for i, rec in enumerate(CRAFT_TABS[name][first:first + self.CRAFT_ROWS]):
+            y = b + ph - 112 - i * self.ROW_PITCH
+            rows.append((TAB_OFFSET[name] + first + i, rec, (x, x + 548, y - 16, y + 16)))
         return rows
+
+    def craft_scrollbar(self):
+        """(track rect, thumb rect) for a tab with more recipes than fit, else None."""
+        n = len(CRAFT_TABS[TAB_NAMES[self.craft_tab]])
+        if n <= self.CRAFT_ROWS:
+            return None
+        l, b, pw, ph = self.inv_layout()
+        top = b + ph - 112 + 16
+        bot = top - self.CRAFT_ROWS * self.ROW_PITCH + 4
+        x = l + 410 + 554
+        span = top - bot
+        th = max(24, span * self.CRAFT_ROWS / n)
+        t0 = top - (span - th) * self.craft_scroll() / (n - self.CRAFT_ROWS)
+        return (x, x + 8, bot, top), (x, x + 8, t0 - th, t0)
+
+    # ------------------------------------------------------------------ scrolling menus (wheel / keys / stick)
+    def ui_scroll(self, steps):
+        """Mouse wheel (or keys / right stick) while a menu is open. steps > 0 scrolls down.
+        Scrolls whichever list the pointer (or controller cursor) is over."""
+        mx = self.mouse_screen[0]
+        if self.ui_open == "inv":
+            l, b, pw, ph = self.inv_layout()
+            if mx < l + 400:
+                self.grid_scroll("inv", steps, len(self.me.inv), self.INV_COLS, self.INV_ROWS)
+            else:
+                self.scroll_crafting(steps)
+        elif self.ui_open == "storage":
+            l, b, pw, ph = self.storage_layout()
+            if mx < l + 450:
+                self.grid_scroll("st_m", steps, len(self.me.inv), 5, 5)
+            else:
+                self.grid_scroll("st_t", steps, len(self.storage), 6, 5)
+        elif self.ui_open == "pets":
+            self.scroll_pets(steps)
+
+    def ui_scroll_key(self, key):
+        """UP / DOWN / PAGE UP / PAGE DOWN in a menu. True if the key was used."""
+        if self.ui_open not in ("inv", "pets", "storage") or not self.me:
+            return False
+        page = self.CRAFT_ROWS if self.ui_open == "inv" else 4
+        step = {arcade.key.UP: -1, arcade.key.DOWN: 1, arcade.key.PAGEUP: -page,
+                arcade.key.PAGEDOWN: page}.get(key)
+        if step is None:
+            return False
+        self.ui_scroll(step)
+        return True
+
+    def ui_scroll_pad(self, pad, dt):
+        """Controller: the right stick scrolls the open menu (a step every ~0.12s while held)."""
+        ry = pad.right[1]
+        self._scroll_t = getattr(self, "_scroll_t", 0) - dt
+        if abs(ry) < 0.5:
+            self._scroll_t = 0
+        elif self._scroll_t <= 0:
+            self.ui_scroll(1 if ry < 0 else -1)
+            self._scroll_t = 0.22 if abs(ry) < 0.85 else 0.12
 
     def draw_inventory(self):
         me = self.me
@@ -433,23 +551,24 @@ class UI:
         self.txt("crs", f"tabs: {tabkeys}", l + 540, b + ph - 36, (170, 170, 170), 11)
         mx, my = self.mouse_screen
         tip = None
-        items = self.inv_items()
-        top = b + ph - 56
+        top = self.inv_grid_top()
+        shown = self.inv_slots()
         for idx in range(self.INV_COLS * self.INV_ROWS):
             cl, cr, cb, ct = self.grid_rect(l + 24, top, idx, self.INV_COLS)
-            if idx < len(items) and items[idx][0] in me.hotbar:
+            if idx < len(shown) and shown[idx][0] in me.hotbar:
                 arcade.draw_lrbt_rectangle_filled(cl - 2, cr + 2, cb - 2, ct + 2, (255, 214, 120, 60))
             arcade.draw_lrbt_rectangle_filled(cl, cr, cb, ct, (34, 40, 48, 230))
             arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, (255, 255, 255, 35), 1)
-            if idx < len(items):
-                it, n = items[idx]
+            if idx < len(shown):
+                it = shown[idx][0]
                 arcade.draw_texture_rect(art.icon(it), arcade.XYWH((cl + cr) / 2, (cb + ct) / 2 + 3, 40, 40))
-                self.txt(f"ic{idx}", str(n), cr - 5, cb + 4, (255, 255, 255), 11, anchor_x="right", bold=True)
+                self.txt(f"ic{idx}", str(me.inv.get(it, 0)), cr - 5, cb + 4, (255, 255, 255), 11, anchor_x="right",
+                         bold=True)
                 if cl < mx < cr and cb < my < ct:
                     tip = it
-        if len(items) > self.INV_COLS * self.INV_ROWS:
-            self.txt("more", f"+{len(items) - 25} more kinds - stash some in storage!", l + 120, b + 172,
-                     (255, 180, 150), 10)
+        # no item is ever lost: a long backpack just scrolls
+        self.draw_grid_bar("inv", l + 24 + self.INV_COLS * (self.SLOT + self.GAP), top, len(me.inv),
+                           self.INV_COLS, self.INV_ROWS, "inv")
         # worn gear
         self.txt("worn", "WEARING", l + 24, b + 172, (255, 230, 170), 12, bold=True)
         for slot, (cl, cr, cb, ct) in self.worn_slots():
@@ -509,6 +628,18 @@ class UI:
             self.txt(f"rc{gi}", cost + at, rr - 10, rb + 10, col, 10, anchor_x="right")
             if hover:
                 hover_desc = ITEMS[item]["desc"]
+        bar = self.craft_scrollbar()
+        if bar:
+            (tl, tr, tb, tt), (hl, hr, hb, ht) = bar
+            arcade.draw_lrbt_rectangle_filled(tl, tr, tb, tt, (34, 40, 48, 220))
+            arcade.draw_lrbt_rectangle_filled(hl, hr, hb, ht, (255, 214, 140, 200))
+            n = len(CRAFT_TABS[TAB_NAMES[self.craft_tab]])
+            first = self.craft_scroll()
+            how = "right stick" if self.use_pad else "wheel / UP DOWN"
+            more = n - first - self.CRAFT_ROWS
+            note = f"{more} more below" if more > 0 else "end of list"
+            self.txt("crmore", f"recipes {first + 1}-{min(n, first + self.CRAFT_ROWS)} of {n}  -  {note}  "
+                     f"({how} to scroll)", l + pw - 22, tb - 14, (255, 214, 140), 10, anchor_x="right")
         stations = [("Workbench", self.station_ok(me, "workbench")), ("Furnace", self.station_ok(me, "furnace")),
                     ("Fire", self.station_ok(me, "campfire")), ("Team storage", use_store)]
         line = "   ".join(f"{n} {'YES' if ok else '-'}" for n, ok in stations)
@@ -528,6 +659,12 @@ class UI:
             if l < x < r and b < y < t:
                 self.action("craft", i=gi)
                 return
+        bar = self.craft_scrollbar()
+        if bar:                      # click the scrollbar track: page up / down
+            (l, r, b, t), (_, _, hb, ht) = bar
+            if l - 6 < x < r + 6 and b < y < t:
+                self.scroll_crafting(-self.CRAFT_ROWS if y > ht else self.CRAFT_ROWS if y < hb else 0)
+                return
         for it, (l, r, b, t) in self.inv_slots():
             if l < x < r and b < y < t:
                 self.action("assign", item=it, s=me.selected)
@@ -545,11 +682,13 @@ class UI:
     def storage_cells(self):
         l, b, pw, ph = self.storage_layout()
         top = b + ph - 74
-        mine = self.inv_items()[:25]
-        mine = [(it, self.grid_rect(l + 24, top, i, 5)) for i, (it, _) in enumerate(mine)]
+        mine = self.inv_items()
+        first = self.grid_first("st_m", len(mine), 5, 5) * 5
+        mine = [(it, self.grid_rect(l + 24, top, i, 5)) for i, (it, _) in enumerate(mine[first:first + 25])]
         order = list(ITEMS)
-        team = sorted(self.storage.items(), key=lambda kv: order.index(kv[0]) if kv[0] in order else 999)[:30]
-        team = [(it, self.grid_rect(l + 470, top, i, 6)) for i, (it, _) in enumerate(team)]
+        team = sorted(self.storage.items(), key=lambda kv: order.index(kv[0]) if kv[0] in order else 999)
+        first = self.grid_first("st_t", len(team), 6, 5) * 6
+        team = [(it, self.grid_rect(l + 470, top, i, 6)) for i, (it, _) in enumerate(team[first:first + 30])]
         return mine, team
 
     def amount_rects(self):
@@ -583,6 +722,8 @@ class UI:
                 arcade.draw_texture_rect(art.icon(it), arcade.XYWH((cl + cr) / 2, (cb + ct) / 2 + 3, 40, 40))
                 self.txt(f"s{side}{i}", str(src.get(it, 0)), cr - 5, cb + 4, (255, 255, 255), 11, anchor_x="right",
                          bold=True)
+        self.draw_grid_bar("st_m", l + 24 + 5 * (self.SLOT + self.GAP), top, len(me.inv), 5, 5, "stm")
+        self.draw_grid_bar("st_t", l + 470 + 6 * (self.SLOT + self.GAP), top, len(self.storage), 6, 5, "stt")
         self.txt("amt", "Move:", l + 410, b + 31, (220, 220, 220), 12, bold=True)
         for i, (al, ar, ab, at) in self.amount_rects():
             on = i == self.move_amount

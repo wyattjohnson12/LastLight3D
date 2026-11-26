@@ -39,6 +39,7 @@ import progress
 import repair
 import savegame
 import ui
+import venom
 import view3d
 import weather
 from gamepad import Gamepad
@@ -1097,6 +1098,7 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
                 z.burn = 3.0
             if w and w.get("slow"):
                 z.chill = 3.0
+        venom.apply(z, w, by)              # venom.py: Brood Fang poison (bosses too)
         self.burst(z.center_x, z.center_y, (110, 30, 30), 7, 140, layer=z.layer)
         if z.hp <= 0:
             if isinstance(z, Boss):
@@ -1390,6 +1392,7 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
                 self._update_bosses(dt)
                 self._update_hazards(dt)
                 self._update_shots(dt)
+                venom.tick(self, dt)          # venom.py: poisoned enemies take damage
                 self._update_defenses(dt)     # defenses.py: turrets shoot
                 self._update_world(dt)
                 self.update_swamp(dt)      # swamp.py: the Drowned rise at night
@@ -1466,6 +1469,7 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
         if p.warmth <= 0:
             speed *= 0.75
         speed *= self.swamp_speed(p, dt)     # swamp.py: mud, bog pools, grasping roots
+        speed *= 1 + p.gear("speed")         # light armor (Chitin Armor) makes you quicker
         if moving:
             n = max(1.0, math.hypot(dx, dy))
             p.sprite.change_x = dx / n * speed * dt
@@ -2878,6 +2882,8 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
             else:
                 self.paused = not self.paused
             return
+        if self.ui_scroll_key(key):        # ui.py: UP / DOWN / PAGE keys scroll crafting & pets
+            return
         if self.ui_open == "inv" and key in (arcade.key.LEFT, arcade.key.RIGHT):
             self.craft_tab = (self.craft_tab + (1 if key == arcade.key.RIGHT else -1)) % len(CRAFT_TABS)
             return
@@ -3068,6 +3074,8 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
             return
         if self.state == "playing" and not self.ui_open and self.me and scroll_y:
             self.me.selected = (self.me.selected - int(math.copysign(1, scroll_y))) % HOTBAR_SLOTS
+        elif self.state == "playing" and self.ui_open and scroll_y:
+            self.ui_scroll(-int(math.copysign(1, scroll_y)))     # ui.py: scroll the crafting / pets list
 
     # --- controller
     def handle_pad(self, dt):
@@ -3141,6 +3149,8 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
             elif "x" in pr:
                 self.save_game(manual=True)
             return
+        if self.rename_pad(pr):            # pets.py: controller typing a pet's name
+            return
         if "start" in pr:
             self.paused = True
             return
@@ -3163,6 +3173,7 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
             self.mouse_screen = (mx, my)
             if "a" in pr:
                 self.click(mx, my, arcade.MOUSE_BUTTON_LEFT)
+            self.ui_scroll_pad(pad, dt)      # ui.py: right stick scrolls long lists
             if self.ui_open == "inv":
                 if "lt" in pr:
                     self.craft_tab = (self.craft_tab - 1) % len(CRAFT_TABS)

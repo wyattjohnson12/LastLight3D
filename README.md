@@ -57,6 +57,7 @@ That's it - run the game again and you have every update.
 | Pets menu | P | D-pad up |
 | Quick order for all pets | F | D-pad down |
 | Rest | SHIFT | hold X |
+| Scroll a long list (backpack, crafting, storage, pets) | mouse wheel, UP / DOWN, PAGE UP / DOWN | right stick |
 | Pause / help | ESC | Menu |
 | Save game (on the pause screen) | S | X |
 | Fullscreen on / off | F11 or Cmd+F | |
@@ -87,6 +88,17 @@ The first boss rises on night 3 (or whatever "nights between bosses" is set to).
 it retreats at dawn - keeping every wound you gave it - and comes back the next night, and every night
 after, until it's beaten. Kill it, and the next boss comes 3 nights later.
 
+Every boss drops a material for its own gear, and each boss's gear beats the one before it
+(order: Quake Titan -> Brood Mother -> Frost Wraith -> Mire Lurker -> Inferno Colossus):
+
+| Boss | Weapon | Armor |
+|---|---|---|
+| Quake Titan | **Titan Hammer** - 14 damage to everything around you, slow | **Titan Plate** (body) armor 10 |
+| Brood Mother | **Brood Fang** - 5.5 damage, very fast stabs, venom: 3 damage/sec for 4s (works on bosses too) | **Chitin Armor** (body) armor 12, warmth 3, move 10% faster |
+| Frost Wraith | **Frost Spear** - 11 damage, huge reach, chills | **Frost Cloak** (cloak) armor 4, warmth 14 |
+| Mire Lurker | **Thornroot Whip** - 13 damage, long reach, slows | **Mire Mask** (head) armor 4, filters spore gas |
+| Inferno Colossus | **Ember Blade** - 13 damage, quick, sets enemies on fire | - |
+
 ## The Mire (swamp biome)
 
 Somewhere out past the meadows (a different spot on every map) lies **the Mire**: dark bog ground,
@@ -95,7 +107,7 @@ drooping willows and dead trees, and murky pools. Mud slows you down a little, a
 - At night the **Drowned** climb out of the bog: soggy, slow, tough swamp zombies that drop reeds and glowcaps.
 - New crafts: **Reed Arrows** (2 reeds + 1 stone = 8 arrows), **Swamp Tonic** (campfire: +35 health,
   +30 energy), **Mire Mask** (workbench, head slot: spore gas does a third of the damage and roots hold
-  you half as long), and **Thornroot Whip** (8 damage, very long reach, slows enemies) from the boss's Mire Heart.
+  you half as long), and **Thornroot Whip** (13 damage, very long reach, slows enemies) from the boss's Mire Heart.
 
 **THE MIRE LURKER** joins the boss rotation (after the Frost Wraith, before the Inferno Colossus):
 spore pods that burst into poison gas (purple circles), roots that burst up under you and hold you still
@@ -105,9 +117,11 @@ in the swamp**, so lure it out onto dry ground. The code lives in `swamp.py` (an
 ## Pets
 
 Tame an animal by holding its favourite food and right-clicking it (wolf: meat, boar & rabbit: berries,
-bee: honey). Each player can have **3 pets** - in co-op everyone has their own. Press **P** (D-pad up)
+bee: honey). Each player can have **8 pets** - in co-op everyone has their own. Press **P** (D-pad up)
 for the **Pets menu**: see their health, give each one its own order (follow / work / stay), rename them,
 and put on **Pet Armor** (leather or iron, made at a workbench) so zombie bites hurt less.
+Renaming works with just a controller too: an on-screen keyboard pops up (A types, X deletes,
+Y switches ABC / abc, START saves, B cancels).
 **F** (D-pad down) still gives the same quick order to all your pets at once.
 
 ## Repairing buildings
