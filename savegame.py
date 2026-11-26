@@ -85,7 +85,21 @@ def _items(d):
 class SaveGame:
     # ------------------------------------------------------------------ who's who
     def rec_key(self, p):
-        return FIRST if p.id == 0 else p.name.lower()
+        """A survivor's record key: FIRST for the host / player 1, otherwise their name - with a "#2", "#3"...
+        suffix if someone already in the game has that name, so two friends both called Sam get their own
+        records. Fixed the first time it's asked for, so a returning Sam reclaims the plain "sam" record."""
+        if p.id == 0:
+            return FIRST
+        key = getattr(p, "save_key", None)
+        if key is None:
+            base = p.name.lower()
+            taken = {getattr(q, "save_key", None) for q in self.players.values() if q is not p} | {FIRST}
+            key, n = base, 1
+            while key in taken:
+                n += 1
+                key = f"{base}#{n}"
+            p.save_key = key
+        return key
 
     def player_record(self, p):
         return {
@@ -98,13 +112,14 @@ class SaveGame:
 
     def restore_player(self, p):
         """Called for every new survivor: if the save has one for them, give them their stuff back."""
-        away = getattr(self, "away", None)
-        if not away or self.net == "client":
+        p.restored = False
+        if self.net == "client":
             return
-        key = self.rec_key(p)
-        rec = away.pop(key, None)
+        key = self.rec_key(p)      # pick their (unique) record key now, while we know who's here
+        rec = (getattr(self, "away", None) or {}).pop(key, None)
         if rec is None:
             return
+        p.restored = True          # host_network leaves them where they were saved
         p.health, p.hunger, p.thirst, p.energy, p.warmth = (
             float(rec.get(k, STAT_MAX)) for k in ("health", "hunger", "thirst", "energy", "warmth"))
         p.inv = _items(rec.get("inv"))
@@ -141,6 +156,14 @@ class SaveGame:
     # ------------------------------------------------------------------ saving
     def can_save(self):
         return self.state == "playing" and self.net != "client" and bool(self.players) and not self.cut
+
+    def save_on_exit(self):
+        """Closing the window / leaving: save even mid-cutscene. A cutscene is only a camera show, so
+        finish it now (the boss keeps its real state: a retreating boss's wounds are already in boss_hp)."""
+        if self.cut and self.net != "client":
+            self.end_cutscene()
+        if self.can_save():
+            self.save_game()
 
     def save_game(self, manual=False):
         if not self.can_save():
