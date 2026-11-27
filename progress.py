@@ -19,6 +19,7 @@ import time
 
 import arcade
 
+import explore
 import ui
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -414,7 +415,9 @@ class Progress:
         self.panel(W / 2 - tw / 2 - 12, W / 2 + tw / 2 + 12, top - 20 * n - 12, top + 34, 170)
         prog = self.prog
         got = len([a for a in ACHIEVEMENTS if a[0] in prog["unlocked"]])
-        self.txt("ps_h", f"THIS GAME  -  Day {self.day}", W / 2 - tw / 2, top + 16, (255, 214, 140), 11, bold=True)
+        found = explore.progress_text(self)        # explore.py: places found, recipes found
+        self.txt("ps_h", f"THIS GAME  -  Day {self.day}" + (f"     {found}" if found else ""), W / 2 - tw / 2, top + 16,
+                 (255, 214, 140), 11, bold=True)
         self.txt("ps_a", f"Achievements {got}/{len(ACHIEVEMENTS)}  (see them on the title screen)", W / 2 + tw / 2,
                  top + 16, (200, 200, 200), 10, anchor_x="right")
         self._stats_table(rows, W / 2 - tw / 2, top - 2, tw, "ps", 11, 20)

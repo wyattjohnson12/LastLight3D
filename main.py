@@ -31,6 +31,7 @@ import art_defenses
 import art_extra
 import art_gear
 import defenses
+import explore  # places to discover, their loot and the recipes you find there
 import firstperson
 import intro
 import local_coop
@@ -638,6 +639,8 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         return p.inv.get(item, 0) + (self.storage.get(item, 0) if use_storage else 0)
 
     def can_craft(self, p, rec):
+        if not explore.known(self, rec):     # explore.py: a recipe still waiting to be found out in the world
+            return False
         if not self.station_ok(p, rec["at"]):
             return False
         s = self.near_storage(p, 220)
@@ -649,7 +652,9 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         rec = RECIPES[idx]
         if not self.can_craft(p, rec):
             self.play("error", 0.25, to=p)
-            if not self.station_ok(p, rec["at"]):
+            if not explore.known(self, rec):
+                self.say("You don't know how to make that yet - find it out in the world.", 2.5, to=p)
+            elif not self.station_ok(p, rec["at"]):
                 self.say(f"Stand next to a {STATIONS.get(rec['at'], rec['at'])} to make that.", 2, to=p)
             else:
                 self.say("Not enough materials.", 2, to=p)
@@ -753,6 +758,8 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         """E / B: use a cave entrance or drink - whichever is at hand (storage opens on your own screen)."""
         if self.near_exit(p):
             self.travel(p)
+        elif explore.open_near(self, p):      # explore.py: search an abandoned place's chest
+            pass
         elif self.near_pond(p):
             self.drink(p)
 
@@ -1843,7 +1850,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
                 z.hp -= 2.0 * dt
                 if random.random() < 0.4:
                     self.burst(z.center_x, z.center_y, (255, 140, 40), 1, 50, 3, 0.5)
-            if day_burn and z.kind not in ("golem", "crawler"):
+            if day_burn and z.kind not in ("golem", "crawler") and not explore.shaded(z):   # a place's guard
                 z.hp -= SUN_BURN_PER_SEC * dt
                 if random.random() < 0.3:
                     self.burst(z.center_x, z.center_y, (90, 90, 90), 1, 40, 4, 0.8)
