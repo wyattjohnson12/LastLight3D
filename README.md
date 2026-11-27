@@ -206,10 +206,17 @@ The camera lives in `settings.py`: `CAM_PITCH_DEG` (how steeply it looks down; 9
 `CAM_FOV_DEG` (field of view), and `CAVE_WALL_HEIGHT` / `BUILD_WALL_HEIGHT`. All the 3D drawing is in
 `view3d.py`; the game logic, co-op and networking are the same as the 2D version.
 
-Trees, rocks, ores, bushes, campfires, braziers, benches, storage bins, turret pedestals and huts are small
-low-poly 3D shapes with their painted picture draped over them (and in first person, animals, zombies,
-bosses and other survivors get simple 3D bodies). Each shape is a short list of rings in the `SHAPES`
-table in `shapes3d.py` - change a number there to make trees taller or rocks lumpier.
+Trees (leafy oaks, swamp willows, dead trees), beehives, rocks, ores, bushes, reeds, glowcaps, campfires,
+braziers, furnaces, lanterns, gates, benches, storage bins, turret pedestals and huts are small low-poly 3D
+shapes built on the GPU, with their painted picture draped over them or plain colours picked from it
+(in first person, animals, zombies, bosses and other survivors get simple 3D bodies). They're all in the
+`SHAPES` table in `shapes3d.py` - change a number there to make trees taller or rocks lumpier.
+
+**Adding a 3D object for a new biome:** read the guide at the top of `shapes3d.py`. In short: give the sprite
+a `.kind`, put it in `L.trees` / `L.rocks` / `L.bushes` / `L.builds`, and register a shape with one of the
+builders, e.g. `SHAPES["pine"] = conifer(tiers=4)`, `SHAPES["ice"] = crystal_cluster(glow=0.5)`,
+`SHAPES["river_reeds"] = blade_clump(n=14)`. Creatures and detailed organic props come from Blender models
+(`models3d.py`, see `docs/MODELS.md`); terrain props stay in `SHAPES`.
 
 Lighting and effects live in `fx3d.py`: the time-of-day colour grading (warm dawn, golden/purple dusk,
 blue night - edit the `_GRADE` table), the light pools from your torch, friends, campfires, braziers
