@@ -835,6 +835,78 @@ def ambient(game, dt, x, y):
         game._burst(px, py, random.choice(((250, 240, 150), (250, 190, 230), (200, 220, 255))), 1, 18, 3.0, 1.4, "over")
 
 
+# --------------------------------------------------------------------------- fish, frogs, leaps (visual only)
+class Critter:
+    """A purely visual fish / frog near the viewer (every computer, never synced). models3d keeps its
+    walk phase in obj.__dict__, so it only needs to be an object."""
+
+    def __init__(self, kind, x, y, heading):
+        self.kind, self.x, self.y, self.heading, self.t = kind, x, y, heading, random.uniform(1, 4)
+
+
+def visuals(game, dt):
+    """Every computer, every frame: move the swimming fish / bank frogs near the viewer and the leaps."""
+    if not _active(game, getattr(game, "view_layer", "over")):
+        return
+    r = rt(game)
+    for lp in r.leaps:
+        lp[5] += dt
+    r.leaps = [lp for lp in r.leaps if lp[5] < lp[6]]
+    m = r.m
+    vx, vy = game.view_pos()
+    near = lambda c, d: abs(c.x - vx) < d and abs(c.y - vy) < d
+    r.fish = [f for f in r.fish if near(f, 700)]
+    r.frogs = [f for f in r.frogs if near(f, 700)]
+    if (len(r.fish) < 7 or len(r.frogs) < 4) and random.random() < dt * 6:
+        spots = [(rv, i) for rv in m.rivers for i in range(0, len(rv.pts), 3)
+                 if abs(rv.pts[i][0] - vx) < 600 and abs(rv.pts[i][1] - vy) < 450]
+        if spots:
+            rv, i = random.choice(spots)
+            (px, py), hw = rv.pts[i], rv.hw[i]
+            dx, dy = TM._dir_at(rv.pts, i)
+            side = random.choice((-1, 1))
+            if len(r.fish) < 7:
+                o = side * random.uniform(0, hw - 14)
+                x, y = px - dy * o, py + dx * o
+                if m.edge_at(x, y) < -10:
+                    roll = random.random()
+                    kind = "fish_gold" if roll < 0.06 else "fish_perch" if roll < 0.4 else "fish"
+                    r.fish.append(Critter(kind, x, y, random.uniform(0, math.tau)))
+            if len(r.frogs) < 4 and random.random() < 0.5:
+                o = side * (hw + random.uniform(4, 11))
+                x, y = px - dy * o, py + dx * o
+                if 2 < m.edge_at(x, y) < 14 and not m.cell(x, y) & (TM.ROAD | TM.CLIFF | TM.BRIDGE):
+                    r.frogs.append(Critter("frog", x, y, math.atan2(-dx * side, dy * side)))
+    for f in r.fish:
+        f.t -= dt
+        if f.t <= 0:
+            f.t = random.uniform(1.5, 4)
+            fl = m.flow.get(int(f.y // TM.C) * m.N + int(f.x // TM.C))
+            f.heading = (math.atan2(fl[1], fl[0]) if fl and random.random() < 0.5 else f.heading) \
+                + random.uniform(-1.2, 1.2)
+        nx, ny = f.x + math.cos(f.heading) * 22 * dt, f.y + math.sin(f.heading) * 22 * dt
+        if m.edge_at(nx, ny) < -8:
+            f.x, f.y = nx, ny
+        else:
+            f.heading += math.pi * 0.7
+    for f in r.frogs:
+        f.t -= dt
+        if f.t <= 0:              # a short hop along the bank
+            f.t = random.uniform(2, 6)
+            a = f.heading + random.uniform(-1.5, 1.5)
+            nx, ny = f.x + math.cos(a) * 18, f.y + math.sin(a) * 18
+            if 2 < m.edge_at(nx, ny) < 14:
+                f.heading, f.goal = a, (nx, ny)
+        g = getattr(f, "goal", None)
+        if g:
+            dx, dy = g[0] - f.x, g[1] - f.y
+            d = math.hypot(dx, dy)
+            k = min(1.0, 70 * dt / d) if d > 0.5 else 1.0
+            f.x, f.y = f.x + dx * k, f.y + dy * k
+            if k >= 1.0:
+                f.goal = None
+
+
 import terrain_draw  # noqa: E402  (the 3D drawing: rivers, roads, cliffs, bridges, crops, fish)
 
 biomes.register(biomes.Biome(
@@ -846,5 +918,5 @@ biomes.register(biomes.Biome(
     gen_surface=gen_surface, ground=_ground, decor=_decor, sample=_sample,
     keepout=keepout, blocked=blocked, water=water, speed_at=speed_at, detour=detour,
     swing=swing, use=use, build_ok=build_ok, update=update, ambient=ambient,
-    save=save, load=load, event=event, draw3d=terrain_draw.draw3d,
+    save=save, load=load, event=event, visuals=visuals, draw3d=terrain_draw.draw3d,
 ))

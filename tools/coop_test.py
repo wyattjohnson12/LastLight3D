@@ -25,7 +25,17 @@ import traceback
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-PORT = 50655           # not the game's real port, so a running game doesn't get in the way
+
+
+def _free_port():
+    """A port nobody is using (the OS picks one), so parallel runs and a running game don't collide."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+PORT = int(os.environ.get("COOP_TEST_PORT") or _free_port())     # the host child gets ours
+os.environ["COOP_TEST_PORT"] = str(PORT)
 
 
 # ====================================================================== host process
