@@ -23,7 +23,9 @@ from world import Shot, dist
 
 DEFENSE_KINDS = ("arrow_turret", "gate", "lantern")
 WALK_THROUGH = ("gate",)        # built pieces that survivors & pets can walk through (zombies can't)
-TURRET_RANGE = 430              # how far a turret can see
+TURRET_RANGE = 430              # how far a turret can see (on flat ground)
+TURRET_HIGH_K = 1.2             # hills.py: +this many px of range per px the turret stands above its target...
+TURRET_HIGH_MAX = 170           # ...up to this much extra
 TURRET_RELOAD = 1.15            # seconds between shots
 TURRET_DAMAGE = 4
 TURRET_WARN_EVERY = 25          # seconds between "out of arrows!" messages
@@ -74,11 +76,22 @@ class Defenses:
                    for s in self.structs.values())
 
     # ------------------------------------------------------------------ host: turrets fire
+    def turret_reach(self, t, x, y):
+        """How far turret t sees towards (x, y): farther when it stands above the target (hills.py)."""
+        if t.layer != "over":
+            return TURRET_RANGE
+        k = (t.center_x, t.center_y)
+        if getattr(t, "_hz", (None,))[0] != k:
+            t._hz = (k, self.ground_height(*k))
+        up = t._hz[1] - self.ground_height(x, y)
+        return TURRET_RANGE + max(0.0, min(TURRET_HIGH_MAX, up * TURRET_HIGH_K))
+
     def _turret_target(self, t, L):
-        best, bd = None, TURRET_RANGE
+        best, bd = None, 1e9
+        reach = TURRET_RANGE + TURRET_HIGH_MAX
         for e in list(L.zombies) + [b for b in L.bosses if getattr(b, "state", "") != "flee"]:
             d = dist(e.position, t.position) - e.radius
-            if d < bd:
+            if d < bd and d < reach and (d < TURRET_RANGE or d < self.turret_reach(t, e.center_x, e.center_y)):
                 best, bd = e, d
         return best
 
@@ -113,8 +126,9 @@ class Defenses:
             d = math.hypot(dx, dy) or 1
             ux, uy = dx / d, dy / d
             x, y = t.center_x + ux * 22, t.center_y + uy * 22
+            reach = self.turret_reach(t, foe.center_x, foe.center_y)
             self.shots.append(Shot("arrow", x, y, ux * ARROW_SPEED, uy * ARROW_SPEED,
-                                   (TURRET_RANGE + 80) / ARROW_SPEED, TURRET_DAMAGE, -1, t.layer))
+                                   (reach + 80) / ARROW_SPEED, TURRET_DAMAGE, -1, t.layer))
             self.play("laser", 0.08, at=t.position, layer=t.layer)
             t.reload = TURRET_RELOAD
 
@@ -136,7 +150,19 @@ class Defenses:
         r = {"arrow_turret": TURRET_RANGE, "lantern": LANTERN_RADIUS}.get(item)
         if r:
             col = (255, 214, 120, 120) if item == "lantern" else (220, 230, 255, 110)
-            arcade.draw_circle_outline(ghost.center_x, ghost.center_y, r, col, 3)
+            x, y = ghost.center_x, ghost.center_y
+            ring = getattr(self, "ground_ring", None)      # view3d.py: lies on the hills
+            if ring is None:
+                arcade.draw_circle_outline(x, y, r, col, 3)
+                return
+            ring(x, y, r, col, 3)
+            if item == "arrow_turret" and self.view_layer == "over":
+                # high ground: how far it reaches downhill (the average over 8 directions), if farther
+                h0 = self.ground_height(x, y)
+                k = sum(max(0.0, min(TURRET_HIGH_MAX, (h0 - self.ground_height(x + math.cos(a) * r, y + math.sin(a) * r))
+                                      * TURRET_HIGH_K)) for a in (i * math.tau / 8 for i in range(8))) / 8
+                if k > 8:
+                    ring(x, y, r + k, (255, 240, 170, 90), 2)
 
     # ------------------------------------------------------------------ overrides of ui.UI
     def light_radius(self):

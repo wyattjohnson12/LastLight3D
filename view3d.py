@@ -29,6 +29,7 @@ from pyglet.math import Mat4, Vec3
 import fx3d
 import models3d
 import shapes3d
+import terrain3d
 import ui
 from settings import *
 
@@ -75,7 +76,6 @@ void main() {
     vec3 c = gl_in[0].gl_Position.xyz;
     bool box = c.z < 0.0;
     if ((boxes_only == 1) != box) return;
-    float z = box ? height : height + c.z;
     vec2 hs = v_size[0] / 2.0;
     float a = radians(v_angle[0]);
     mat2 rot = mat2(cos(a), -sin(a), sin(a), cos(a));
@@ -83,10 +83,15 @@ void main() {
     vec2 uv0, uv1, uv2, uv3;
     uvs(uv0, uv1, uv2, uv3);
     gs_color = v_color[0];
-    gl_Position = mvp * vec4(rot * vec2(-hs.x, hs.y) + c.xy, z, 1.0);  gs_uv = uv0; EmitVertex();
-    gl_Position = mvp * vec4(rot * vec2(-hs.x, -hs.y) + c.xy, z, 1.0); gs_uv = uv2; EmitVertex();
-    gl_Position = mvp * vec4(rot * vec2(hs.x, hs.y) + c.xy, z, 1.0);   gs_uv = uv1; EmitVertex();
-    gl_Position = mvp * vec4(rot * vec2(hs.x, -hs.y) + c.xy, z, 1.0);  gs_uv = uv3; EmitVertex();
+    // HILLS (terrain3d.py): a block's top sits level on the ground under its centre; anything lying on the
+    // ground takes the ground height at each corner (+ a hair, so it isn't hidden in the ground mesh)
+    float zc = box ? height + ground_z(c.xy) : height + c.z + (hill_on == 1 ? 1.5 : 0.0);
+    vec2 p0 = rot * vec2(-hs.x, hs.y) + c.xy, p1 = rot * vec2(-hs.x, -hs.y) + c.xy;
+    vec2 p2 = rot * vec2(hs.x, hs.y) + c.xy, p3 = rot * vec2(hs.x, -hs.y) + c.xy;
+    gl_Position = mvp * vec4(p0, box ? zc : zc + ground_z(p0), 1.0); gs_uv = uv0; EmitVertex();
+    gl_Position = mvp * vec4(p1, box ? zc : zc + ground_z(p1), 1.0); gs_uv = uv2; EmitVertex();
+    gl_Position = mvp * vec4(p2, box ? zc : zc + ground_z(p2), 1.0); gs_uv = uv1; EmitVertex();
+    gl_Position = mvp * vec4(p3, box ? zc : zc + ground_z(p3), 1.0); gs_uv = uv3; EmitVertex();
     EndPrimitive();
 }
 """
@@ -123,10 +128,13 @@ void main() {
         vec2 side = vec2(-dir.y, dir.x) * rx * 0.95;
         vec2 along = dir * rx * (0.5 + 0.6 * ln);
         vec2 ctr = c.xy + dir * (rx * 0.5 + extra * 0.6) * ln;
-        gl_Position = mvp * vec4(ctr - along + side, 0.3, 1.0); gs_uv = vec2(-1.0, 1.0);  EmitVertex();
-        gl_Position = mvp * vec4(ctr - along - side, 0.3, 1.0); gs_uv = vec2(-1.0, -1.0); EmitVertex();
-        gl_Position = mvp * vec4(ctr + along + side, 0.3, 1.0); gs_uv = vec2(1.0, 1.0);   EmitVertex();
-        gl_Position = mvp * vec4(ctr + along - side, 0.3, 1.0); gs_uv = vec2(1.0, -1.0);  EmitVertex();
+        mat4 vp = window.projection * window.view;        // HILLS: each corner on the ground under it
+        float zs = hill_on == 1 ? 1.8 : 0.3;
+        vec2 s0 = ctr - along + side, s1 = ctr - along - side, s2 = ctr + along + side, s3 = ctr + along - side;
+        gl_Position = vp * vec4(s0, zs + ground_z(s0), 1.0); gs_uv = vec2(-1.0, 1.0);  EmitVertex();
+        gl_Position = vp * vec4(s1, zs + ground_z(s1), 1.0); gs_uv = vec2(-1.0, -1.0); EmitVertex();
+        gl_Position = vp * vec4(s2, zs + ground_z(s2), 1.0); gs_uv = vec2(1.0, 1.0);   EmitVertex();
+        gl_Position = vp * vec4(s3, zs + ground_z(s3), 1.0); gs_uv = vec2(1.0, -1.0);  EmitVertex();
         EndPrimitive();
         return;
     }
@@ -207,7 +215,7 @@ void main() { f_color = v_col; }
 
 
 # =========================================================================== the mixin
-class View3D(fx3d.FX3D, models3d.CreatureModels):
+class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
     """Mixed into the game window. Replaces the flat camera with a tilted 3D one."""
 
     # ------------------------------------------------------------------ camera maths
@@ -229,13 +237,13 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
         d = (vh / 2) / TAN
         fx, fy = self.camera.position
         cp, sp = math.cos(PITCH), math.sin(PITCH)
-        eye = (fx, fy - d * cp, d * sp)
+        eye = (fx, fy - d * cp, d * sp + self.ground_z(fx, fy))     # HILLS: the camera rides up with you
         return eye, (0.0, cp, -sp), (1.0, 0.0, 0.0), (0.0, sp, cp), d, vw, vh
 
     def project(self, x, y, z=0.0):
         """World point -> screen position in GUI coordinates (None if it's behind the camera)."""
         (ex, ey, ez), f, r, u, d, vw, vh = self._basis()
-        rx, ry, rz = x - ex, y - ey, z - ez
+        rx, ry, rz = x - ex, y - ey, z + self.ground_z(x, y) - ez      # HILLS: z is above the ground there
         zc = rx * f[0] + ry * f[1] + rz * f[2]           # distance in front of the camera
         if zc < 1:
             return None
@@ -248,14 +256,41 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
         return self.project(x, y, px * UP)
 
     def ground_at(self, sx, sy):
-        """Screen position (GUI coordinates) -> the point on the ground under it."""
+        """Screen position (GUI coordinates) -> the point on the ground under it (the hills too)."""
         (ex, ey, ez), f, r, up, d, vw, vh = self._basis()
         u, v = (sx - vw / 2) / d, (sy - vh / 2) / d
         dx, dy, dz = (f[i] + r[i] * u + up[i] * v for i in range(3))
         if dz > -1e-3:
             dz = -1e-3
         t = -ez / dz
-        return ex + dx * t, ey + dy * t
+        g = self.hill_grid()
+        if g is None:
+            return ex + dx * t, ey + dy * t
+        return self._ray_hills(g, ex, ey, ez, dx, dy, dz, t)
+
+    @staticmethod
+    def _ray_hills(g, ex, ey, ez, dx, dy, dz, t_flat):
+        """HILLS: march the view ray over the height grid to where it first goes under the ground."""
+        t0 = max(0.0, (g.hmax - ez) / dz)           # where the ray comes down to the highest hill
+        if t0 >= t_flat:
+            return ex + dx * t_flat, ey + dy * t_flat
+        step = 24.0 / max(1e-3, math.hypot(dx, dy))   # ~24 px along the ground per step
+        t_end = min(t_flat, t0 + 6000.0 * step / 24.0)
+        prev = t0
+        t = t0
+        while t < t_end:
+            t = min(t_end, t + step)
+            if ez + dz * t <= g.at(ex + dx * t, ey + dy * t):
+                lo, hi = prev, t
+                for _ in range(10):
+                    mid = (lo + hi) / 2
+                    if ez + dz * mid <= g.at(ex + dx * mid, ey + dy * mid):
+                        hi = mid
+                    else:
+                        lo = mid
+                return ex + dx * hi, ey + dy * hi
+            prev = t
+        return ex + dx * t_end, ey + dy * t_end
 
     def mouse_ground(self):
         mx, my = self.to_window(*self.mouse_screen)     # game layout -> real window (fullscreen scaling)
@@ -273,6 +308,43 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
         else:
             self.projection = Mat4.perspective_projection(vw / vh, 20.0, 8000.0, FOV)
         self.view = Mat4.look_at(Vec3(ex, ey, ez), Vec3(ex + f[0], ey + f[1], ez + f[2]), Vec3(0.0, 0.0, 1.0))
+        self._view3d = self.view
+
+    def lift_to_ground(self, x=None, y=None):
+        """HILLS: plain arcade shapes drawn in the 3D camera lie at z = 0. Lift the camera so the next ones
+        lie on the ground at (x, y); call with no arguments to put it back."""
+        base = getattr(self, "_view3d", None)
+        if base is None:
+            return
+        z = self.ground_z(x, y) if x is not None else 0.0
+        self.view = base @ Mat4.from_translation(Vec3(0.0, 0.0, z)) if z else base
+
+    def ground_ring(self, x, y, r, col, width=2):
+        """A circle outline lying on the ground (it follows the hills). Call with the 3D camera on."""
+        if self.hill_grid() is None:
+            arcade.draw_circle_outline(x, y, r, col, width)
+            return
+        n = max(24, min(96, int(r / 7)))
+        strips, cur = [], []
+        for i in range(n + 1):
+            a = i / n * math.tau
+            s = self.project(x + math.cos(a) * r, y + math.sin(a) * r, 1.5)
+            if s is None:
+                if len(cur) > 1:
+                    strips.append(cur)
+                cur = []
+            else:
+                cur.append(s)
+        if len(cur) > 1:
+            strips.append(cur)
+        depth = self.ctx.is_enabled(self.ctx.DEPTH_TEST)
+        self.ctx.disable(self.ctx.DEPTH_TEST)
+        self.gui.use()
+        for pts in strips:
+            arcade.draw_line_strip(pts, col, width)
+        self.use_world3d()
+        if depth:
+            self.ctx.enable(self.ctx.DEPTH_TEST)
 
     # ------------------------------------------------------------------ GPU bits
     def _init3d(self):
@@ -281,8 +353,10 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
         lib = open(arcade.resources.resolve(":system:shaders/lib/sprite.glsl")).read()
         vs = open(arcade.resources.resolve(":system:shaders/sprites/sprite_list_geometry_vs.glsl")).read()
         ctx = self.ctx
-        flat = ctx.program(vertex_shader=vs, geometry_shader=FLAT_GEO.replace("%LIB%", lib), fragment_shader=SPRITE_FS)
-        bill = ctx.program(vertex_shader=vs, geometry_shader=BILL_GEO.replace("%LIB%", lib), fragment_shader=SPRITE_FS)
+        hlib = lib + terrain3d.GLSL          # HILLS: ground_z() in every world shader (terrain3d.py)
+        flat = ctx.program(vertex_shader=vs, geometry_shader=FLAT_GEO.replace("%LIB%", hlib), fragment_shader=SPRITE_FS)
+        bill = ctx.program(vertex_shader=vs, geometry_shader=terrain3d.inject(BILL_GEO.replace("%LIB%", hlib), "0.0"),
+                           fragment_shader=SPRITE_FS)
         for p in (flat, bill):
             p["sprite_texture"] = 0
             p["uv_texture"] = 1
@@ -300,7 +374,7 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
         self._progs3d = (flat, bill, ctx.program(vertex_shader=BOX_VS, fragment_shader=BOX_FS))
         # 3D shapes (shapes3d.py): with OpenGL 4 one draw call makes every pass of a shape (geometry shader
         # invocations); on plain 3.3 we fall back to one draw per pass
-        self._mesh_lib, self._mesh_vs = lib, vs
+        self._mesh_lib, self._mesh_vs = hlib, vs
         self._mesh_progs = {}
         self._mesh_inv = ctx.gl_version >= (4, 0)
         try:
@@ -310,6 +384,7 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
             self._mesh_progs = {}
             self._mesh_prog(1)
         self._mesh_t0 = time.perf_counter()
+        self._hill_init(vs, hlib, SPRITE_FS)
         self._kinds3d = {}
         self._ghost3d = arcade.SpriteList()
         self._wall_sig = {}
@@ -323,12 +398,14 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
         if p is None:
             geo, frag = shapes3d.program_sources(self._mesh_lib, passes if self._mesh_inv else None,
                                                  verts if self._mesh_inv else shapes3d.MAX_VERTS)
-            p = self.ctx.program(vertex_shader=self._mesh_vs, geometry_shader=geo, fragment_shader=frag)
+            p = self.ctx.program(vertex_shader=self._mesh_vs, geometry_shader=terrain3d.inject(geo, "R * 0.5"),
+                                 fragment_shader=frag)
             p["sprite_texture"] = 0
             p["uv_texture"] = 1
             p["inflate"] = 1.0
             p["glow_pass"] = 0
             p["ShapeBlock"] = shapes3d.BINDING
+            self.hill_apply(p)              # HILLS (terrain3d.py)
             self._mesh_progs[key] = p
         return p
 
@@ -432,15 +509,21 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
                 self.mesh(sub, kind, blend=blend, glow=True)
 
     # ------------------------------------------------------------------ 3D blocks
-    def _box(self, out, x0, y0, x1, y1, h, col, faces):
-        """Side faces of a block (the top is the sprite, drawn flat at height h)."""
+    def _box(self, out, x0, y0, x1, y1, h, col, faces, ground=None):
+        """Side faces of a block (the top is the sprite, drawn flat at height h).
+        ground(x, y): HILLS - the bottom follows the ground at each corner, the top sits level h above the
+        ground under the centre (the flat shader puts the top sprite there too)."""
         r, g, b = (c / 255 for c in col)
+        top_z = h + (ground((x0 + x1) / 2, (y0 + y1) / 2) if ground else 0.0)
 
         def quad(a, bb, c, d, shade, dark_bottom=0.45):
             top = (r * shade, g * shade, b * shade, 1.0)
             bot = (r * shade * dark_bottom, g * shade * dark_bottom, b * shade * dark_bottom, 1.0)
             for (px, py, pz) in (a, bb, c, a, c, d):
-                out.extend((px, py, pz))
+                if ground:
+                    out.extend((px, py, top_z if pz > 0 else ground(px, py) - 4.0))
+                else:
+                    out.extend((px, py, pz))
                 out.extend(top if pz > 0 else bot)
 
         if "s" in faces:
@@ -486,7 +569,8 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
 
     def _built_walls(self, L):
         walls = [s for s in L.builds if getattr(s, "kind", "") in WALL_KINDS]
-        sig = tuple((id(s), s.center_x, s.center_y) for s in walls)
+        hg = self.hill_grid(L.name)
+        sig = (id(hg),) + tuple((id(s), s.center_x, s.center_y) for s in walls)
         if self._wall_sig.get(L.name) != sig:
             self._wall_sig[L.name] = sig
             out = []
@@ -494,7 +578,7 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
                 s.depth = -1
                 hw, hh = s.width / 2, s.height / 2
                 self._box(out, s.center_x - hw, s.center_y - hh, s.center_x + hw, s.center_y + hh,
-                          BUILD_WALL_HEIGHT, WALL_SIDES[s.kind], "sewn")
+                          BUILD_WALL_HEIGHT, WALL_SIDES[s.kind], "sewn", hg.at if hg is not None else None)
             self._wall_geo[L.name] = self._geo(out)
         return self._wall_geo.get(L.name)
 
@@ -531,6 +615,8 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
         cave_geo = self._cave_walls(L) if vl != "over" else None   # any underground layer
         built_geo = self._built_walls(L)
         self.fx_tick()               # fx3d.py: particles move once per frame (not once per split view)
+        self._m3_init()
+        hilly = self.hill_bind(vl)   # HILLS (terrain3d.py): the height texture, or flat for this layer
         dk = self.layer_dark(vl) if vl != "over" else self.darkness   # biomes.LAYER_INFO
         sx, sy, shade = fx3d.sun(self.phase if vl == "over" else 0.27, dk)
         bill = self._progs3d[1]
@@ -547,21 +633,43 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
         gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
 
         # ---- on the ground
-        self.flat(L.ground)
+        if hilly:       # HILLS: the ground is a heightfield; what lies on it is depth tested against it
+            ctx.enable(ctx.DEPTH_TEST)
+            gl.glDepthFunc(gl.GL_LEQUAL)
+            self.draw_hill_ground(L.ground, (sx, sy))
+            gl.glDepthMask(gl.GL_FALSE)
+        else:
+            self.flat(L.ground)
         self.flat(L.decor)
         self.flat(L.ponds)
         if vl == "over":
             self.flat(L.exits)
         self.flat(L.traps)
-        self.draw_ground_hazards()
+        if hilly:       # plain arcade shapes: lifted onto the ground under each hazard, drawn over the hills
+            ctx.disable(ctx.DEPTH_TEST)
+            every = self.hazards
+            try:
+                for h in every:
+                    self.hazards = [h]
+                    self.lift_to_ground(h.x, h.y)
+                    self.draw_ground_hazards()
+            finally:
+                self.hazards = every
+                self.lift_to_ground()
+            ctx.enable(ctx.DEPTH_TEST)
+        else:
+            self.draw_ground_hazards()
         uprights = [L.bushes, L.rocks, L.builds, L.animals, self.player_list, L.zombies, L.bosses, L.huts, L.trees]
         for lst in uprights:
             self.stand(lst, shadow=True)
+        if hilly:
+            gl.glDepthMask(gl.GL_TRUE)
+            ctx.disable(ctx.DEPTH_TEST)
         for x, y, r0, r1, t, dur, col, *ly in self.rings:
             if ly and ly[0] != vl:
                 continue
             k = t / dur
-            arcade.draw_circle_outline(x, y, r0 + (r1 - r0) * k, col + (int(230 * (1 - k)),), 6 * (1 - k) + 2)
+            self.ground_ring(x, y, r0 + (r1 - r0) * k, col + (int(230 * (1 - k)),), 6 * (1 - k) + 2)
 
         # ---- standing up (depth tested so blocks hide what's behind them)
         ctx.enable(ctx.DEPTH_TEST)
@@ -630,7 +738,7 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
             t = self.tame_target()
             if t:
                 ctx.disable(ctx.DEPTH_TEST)
-                arcade.draw_circle_outline(t.center_x, t.center_y, 30, (255, 150, 190, 200), 2)
+                self.ground_ring(t.center_x, t.center_y, 30, (255, 150, 190, 200), 2)
         ctx.enable(ctx.DEPTH_TEST)
         self.fx_draw_particles(vl, additive=False)    # chips, dust, blood, smoke (lit by the light map)
         ctx.disable(ctx.DEPTH_TEST)
@@ -664,9 +772,12 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
             ctx.disable(ctx.DEPTH_TEST)
             for p in self.players.values():   # teammates carry a little lantern so you can find them
                 if p is not self.me and p.alive and p.layer == vl:
+                    self.lift_to_ground(p.sprite.center_x, p.sprite.center_y)
                     arcade.draw_circle_filled(p.sprite.center_x, p.sprite.center_y, 30, p.color + (int(70 * dk),))
             for b in L.bosses:     # bosses are always visible - terrifying silhouettes
+                self.lift_to_ground(b.center_x, b.center_y)
                 arcade.draw_circle_filled(b.center_x, b.center_y, b.radius + 30, (255, 80, 40, int(40 * dk)))
+            self.lift_to_ground()
             if vl != "over":
                 for s in L.exits:
                     arcade.draw_circle_filled(s.center_x, s.center_y, 60, (255, 240, 200, 40))

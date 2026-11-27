@@ -54,8 +54,22 @@ class FirstPerson:
 
     def fp_eye(self):
         me = self.me
-        return me.sprite.center_x, me.sprite.center_y, max(30.0, me.sprite.height * FP_EYE_K * (1 / math.cos(
-            math.radians(CAM_PITCH_DEG))))
+        x, y = me.sprite.center_x, me.sprite.center_y
+        return x, y, max(30.0, me.sprite.height * FP_EYE_K * (1 / math.cos(
+            math.radians(CAM_PITCH_DEG)))) + self.fp_ground(x, y)
+
+    def fp_ground(self, x, y):
+        """HILLS: the ground under your feet, eased a little so the view glides over the bumps
+        (time-based, so it's the same however often it's asked for in a frame; big jumps snap)."""
+        gz = self.ground_z(x, y) if hasattr(self, "ground_z") else 0.0
+        t = getattr(self, "flame_t", 0.0)
+        st = self.__dict__.get("_fp_gz")
+        if st is None or abs(st[0] - gz) > 80 or t < st[1] or t - st[1] > 0.5:
+            val = gz
+        else:
+            val = st[0] + (gz - st[0]) * (1 - math.exp(-(t - st[1]) * 12.0))
+        self._fp_gz = (val, t)
+        return val
 
     # ------------------------------------------------------------------ input
     def fp_tick(self, dt):

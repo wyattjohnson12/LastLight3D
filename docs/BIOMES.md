@@ -179,6 +179,17 @@ shape, with its 2D picture draped on it. Anything without one is a flat standing
 how-to guide at the top of `shapes3d.py` before adding entries (tree canopies, foliage, glowing mushrooms,
 blade clumps, ...). Another agent is writing it right now. Add new entries; don't change existing ones.
 
+## Ground height (hills)
+
+`game.ground_height(x, y)` is the gameplay height (sum of every `height` hook). The 3D view draws
+`game.ground_z(x, y)` = the same total sampled on hills.py's 64 px grid (a GPU texture), so: **new 3D code that
+draws in world space gets the hills for free** if it goes through `view3d`'s `flat` / `stand` / `mesh`, the
+models3d / fx3d programs, or `project()` (screen spots: z is *above the ground*). A new shader that draws
+world geometry should be passed through `terrain3d.inject(src, foot)` (it lifts `mvp` by `ground_z(c.xy)`) and
+its program added in `Terrain3D._hill_programs`. Plain arcade shapes drawn in the 3D camera lie at z = 0: use
+`self.lift_to_ground(x, y)` / `self.ground_ring(x, y, r, col)`. Heights must stay smooth-ish: the ground mesh
+is a 64 px grid, so a cliff becomes a steep 64 px ramp.
+
 ## File ownership (parallel work)
 
 | Agent | Owns | Touches elsewhere (small, clearly marked) |
@@ -188,7 +199,7 @@ blade clumps, ...). Another agent is writing it right now. Add new entries; don'
 | Highlands | `highlands.py`, `art_highlands.py` | `shapes3d.SHAPES` entries |
 | Terrain / Meadow | `terrain.py`, `art_terrain.py` | `shapes3d.SHAPES`; drinking from rivers in `main.near_pond`; `main.step_body` if rivers must block zombies |
 | Hollows | `hollows.py`, `art_hollows.py` | `shapes3d.SHAPES`; `fx3d.py` `"cave"` checks |
-| Hills | `hills.py` | height in `view3d.py` shaders, `firstperson.py` eye height, `defenses.py` turret range |
+| Hills | `hills.py`, `terrain3d.py` | height in `view3d.py` shaders (`hill_bind`, `ground_z`, `ground_ring`, `lift_to_ground`), the `terrain3d.inject` line in `fx3d.py`, `firstperson.py` eye height, `defenses.py` turret range |
 
 Nobody but the owner of `biomes.py` changes the layout, `world._build_v2` or the hook plumbing. If you need
 a new hook, add it in `biomes.Biome.HOOKS` + one `BiomeWorld` method + one call site, and note it here.

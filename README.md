@@ -107,6 +107,24 @@ different arrangement on every map, lie the **Frostwood Tundra**, the **Stone Hi
 For modders and contributors: `docs/BIOMES.md` explains how biomes, terrain and extra underground layers
 plug in (`biomes.py`).
 
+## Hills
+
+The big map isn't flat any more: the ground rolls in gentle hills through the Forest and the Riverlands,
+gets bumpier in the Tundra and the Ashlands, and climbs highest in the Stone Highlands. The Mire, the area
+around the spawn, ponds, cave entrances and rivers stay flat (water always lies in the valleys).
+
+* Walking **uphill is slower** (down to 60% on the steepest slopes) and walking downhill a little faster.
+* **Arrow Turrets on high ground see farther** - up to 170 extra range against things below them. While you
+  place one, a second, fainter ring shows how far it reaches downhill.
+* Everything stands on the ground where it is: survivors, creatures, trees, rocks, buildings, walls, shadows,
+  fire light, particles. In first person your eyes rise and fall with the ground.
+* Saved games from before the big map stay perfectly flat, and so do the caves.
+
+How it works (for contributors): `hills.py` makes the heights (seeded noise on a 64 px grid, cached per world,
+summed with any other module's `height` hook by `game.ground_height`); `terrain3d.py` puts them on the GPU as a
+small texture that every 3D shader reads, turns the ground tiles into a shaded heightfield, and lifts every
+sprite, shape, creature model, particle and light by the ground under it.
+
 ## The Mire (swamp biome)
 
 Somewhere out past the meadows (a different spot on every map) lies **the Mire**: dark bog ground,
