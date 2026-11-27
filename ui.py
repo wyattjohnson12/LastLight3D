@@ -10,6 +10,7 @@ import art
 import art_extra  # noqa: F401  (registers the new icons)
 import biomes
 import explore
+import updates
 import lairs
 import savegame
 from settings import *
@@ -1073,6 +1074,14 @@ class UI:
         self.txt("t2", "LAST LIGHT", W / 2, H - 154, (255, 214, 140), 68, anchor_x="center", bold=True)
         self.txt("t3", "Gather by day.  Build by dusk.  Survive the night - together.", W / 2, H - 200,
                  (230, 230, 230), 17, anchor_x="center")
+        if getattr(self, "_upd", None) is None:      # updates.py: is a newer version out? (background, quiet offline)
+            self._upd = updates.Checker()
+        self.txt("ver", f"version {self._upd.mine}", W - 12, 12, (150, 150, 150), 11, anchor_x="right")
+        if self._upd.latest:
+            v = self._upd.latest["version"]
+            arcade.draw_lrbt_rectangle_filled(W / 2 - 330, W / 2 + 330, H - 262, H - 222, (120, 70, 20, 200))
+            self.txt("upd1", f"NEW VERSION {v} IS OUT!  Close the game and open \"Play Last Light\" to update.",
+                     W / 2, H - 248, (255, 230, 170), 13, anchor_x="center", bold=True)
         if self.menu == "join":
             self.txt("jt", "JOIN A GAME", W / 2, 420, (255, 230, 170), 18, anchor_x="center", bold=True)
             if not (self.finder and self.finder.list()):

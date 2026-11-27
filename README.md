@@ -6,40 +6,40 @@ Craft at a workbench, smelt iron, wear armor, tame pets, share a team storage bi
 explore the caves, and find the bosses' lairs - then wake them when you're ready. Play solo, online co-op over
 Wi-Fi, or split-screen on one computer. Keyboard + mouse or an Xbox controller.
 
-## First time setup
+## Download, play and update (no git needed)
 
-1. Install **Python 3** from <https://www.python.org/downloads/>
-   (Windows: tick **"Add Python to PATH"** in the installer).
-2. Open Terminal (Mac) or Command Prompt (Windows) and run:
+**Website: <https://wyattjohnson12.github.io/LastLight3D/>** - one-click download and step-by-step help.
 
-   ```
-   git clone https://github.com/wyattjohnson12/LastLight3D.git
-   cd LastLight3D
-   pip3 install -r requirements.txt
-   ```
-   (Windows: use `pip` instead of `pip3`.)
+1. Install **Python 3.10 or newer** from <https://www.python.org/downloads/>
+   (Windows: tick **"Add python.exe to PATH"** in the installer).
+2. Download the game: <https://github.com/wyattjohnson12/LastLight3D/archive/refs/heads/main.zip> and unzip it.
+3. Double-click **Play Last Light (Windows)** or **Play Last Light (Mac)** (Mac, first time: right-click -> Open).
 
-## Play
+The Play file installs what the game needs the first time, and **checks for a new version every time** - say
+yes and it updates itself (your saves, settings and achievements are kept). The title screen shows your
+version in the corner, and tells you when a newer one is out.
+
+### With git
 
 ```
+git clone https://github.com/wyattjohnson12/LastLight3D.git
 cd LastLight3D
-python3 main.py
+python3 play.py          (Windows: py play.py)
 ```
-(Windows: `python main.py`)
+Update with `git pull` (or let `play.py` do it - in a git copy it runs `git pull` for you). You can also run
+`pip3 install -r requirements.txt` once and then `python3 main.py`.
 
-## Get the newest version
+### Releasing a new version (for the developer)
 
-```
-cd LastLight3D
-git pull
-```
-That's it - run the game again and you have every update.
+Bump `"version"` in `version.json` (e.g. 2.0.0 -> 2.1.0), write what's new in `"notes"` (move the old ones into
+`"history"`), and push to `main`. Everyone's launcher, title screen and the website pick it up from there.
 
 ## Playing together
 
 - **Online co-op (same Wi-Fi):** one person picks **Host co-op game**, everyone else picks
   **Join co-op game** - the host's game shows up in the list. Click **Allow** if your computer
-  asks about network connections. Everyone should `git pull` first so you're on the same version.
+  asks about network connections. Everyone should update first (open **Play Last Light**, or `git pull`)
+  so you're all on the same version - it's in the corner of the title screen.
 - **Local co-op (one screen):** pick **Local co-op**. Press **A** on a controller or **ENTER**
   on the keyboard to join, then **START** / **ENTER** to begin.
 
