@@ -9,6 +9,7 @@ import arcade
 import art
 import art_extra  # noqa: F401  (registers the new icons)
 import biomes
+import explore
 import savegame
 from settings import *
 
@@ -351,6 +352,9 @@ class UI:
         use, inter = ("LT", "B") if pad else ("Right-click", "E")
         if self.near_storage(me):
             return f"{inter}  open TEAM STORAGE  (crafting nearby uses it automatically)"
+        found = explore.hint(self, me, inter)      # explore.py: a place's chest at hand
+        if found:
+            return found
         ex = self.near_exit(me)
         if ex:
             far = self.portal_from(me.layer, ex.position)      # biomes.py: any layer (cave, deep...)
@@ -617,8 +621,12 @@ class UI:
         use_store = self.near_storage(me, 220)
         hover_desc = None
         for gi, rec, (rl, rr, rb, rt) in self.recipe_rows():
-            ok = self.can_craft(me, rec)
             hover = rl < mx < rr and rb < my < rt
+            if not explore.known(self, rec):       # explore.py: not found yet - a silhouette and where to look
+                desc = explore.draw_locked_recipe(self, gi, rec, (rl, rr, rb, rt), hover)
+                hover_desc = desc if hover else hover_desc
+                continue
+            ok = self.can_craft(me, rec)
             arcade.draw_lrbt_rectangle_filled(rl, rr, rb, rt, (60, 80, 60, 210) if hover and ok else
                                               (70, 50, 50, 190) if hover else (34, 40, 48, 210))
             item = rec["item"]
@@ -1143,7 +1151,7 @@ class UI:
             ("Right-click  |  LT", "build / eat / tame (hold the animal's food)"),
             ("1-8, wheel  |  LB / RB", "choose hotbar item"),
             ("TAB  |  Y", "backpack, crafting & armor"),
-            ("E  |  B", "open storage, use cave entrance, drink"),
+            ("E  |  B", "open storage, search a place, use cave entrance, drink"),
             ("Q  |  B", "quick eat / drink"), ("P  |  D-pad up", "Pets menu: names, orders, pet armor"),
             ("F  |  D-pad down", "quick order for all pets: follow / work / stay"),
             ("SHIFT + move  |  click L-stick", "sprint (uses energy - walking is free)"),

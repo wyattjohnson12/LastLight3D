@@ -15,6 +15,7 @@ calls its hooks. If you are adding a biome, you should only need to edit your ow
 | The Stone Highlands (Quake Titan) | `highlands.py` | `highlands` | 40 |
 | Crystal Hollows (layer `"deep"`, reached from the cave) | `hollows.py` | `hollows` | 60 |
 | Hills (ground height map) | `hills.py` | `hills` | 70 |
+| Places to discover (camps, ruins, graves... + recipes to find) | `explore.py` | `explore` | 80 |
 
 ## The layout (worldgen 2)
 
@@ -211,3 +212,14 @@ Call sites: `main.step_body` (terrain blocks zombies / animals; bosses and `ANIM
 `main.attack` (swing), `main.consume` (non-food use, e.g. seeds), `main.placement` (build_ok), `main.apply_event`
 (`["bio", module, ...]`, send with `game.biome_emit`), `savegame` (`"biomes"` field), `view3d.draw_world_3d`
 (draw3d stages "ground" / "solid"). `main.near_pond` also drinks from `water` (via `game.water_near`).
+
+### Places to discover (explore.py)
+
+`explore.py` runs last (order 80) and adds **no nodes**: its props are its own SpriteLists drawn with
+`game.mesh` in the `draw3d` "props" stage (ground patches in the "ground" stage), plus invisible blockers in
+`L.solid`. Its places keep clear of the spawn, of every `layout.centres` spot (boss lairs) and of `keepout` /
+`blocked` / `water` / bog pools. Hooks elsewhere: `main.interact` (search a container), `main.can_craft` /
+`craft` (`explore.known`: recipes still to be found), the sun burn in `main._update_zombies` (`explore.shaded`:
+a place's guards hide in the shade), `ui.context_hint`, the crafting list in `ui.draw_inventory`, and the
+pause screen line in `progress.py`. Adding a kind of place: see the guide at the top of `explore.py`.
+

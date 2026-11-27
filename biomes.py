@@ -33,7 +33,7 @@ LEGACY_SIZE = WORLD_SIZES[LEGACY]
 
 # The plug-in modules, imported in THIS order by load_plugins() (main.py calls it right after swamp.py, so
 # their items / recipes are in settings.py's tables before ui.py builds the crafting tabs).
-PLUGINS = ["tundra", "ashlands", "highlands", "terrain", "hollows", "hills"]
+PLUGINS = ["tundra", "ashlands", "highlands", "terrain", "hollows", "hills", "explore"]
 
 # The five outer regions, going round the forest in this order (the ring is rotated by the seed).
 RING = ["tundra", "highlands", "ash", "mire", "meadow"]
