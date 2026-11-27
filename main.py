@@ -3347,7 +3347,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             pk = self.pack_of(me)       # backpack.py: B next to your pack picks it up
             at_pack = pk is not None and pk.layer == me.layer and dist(pk.pos, me.pos) < backpack.REACH
             if (at_pack or self.near_storage(me) or self.near_exit(me) or self.near_pond(me)
-                    or lairs.near_altar(self, me)):
+                    or lairs.near_altar(self, me) or explore.near(self, me)):
                 self.interact_key()
             else:
                 self.action("quick")

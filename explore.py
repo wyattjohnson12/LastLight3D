@@ -782,6 +782,12 @@ def _guards(game, pl, p, tier):
         game.play("roar", 0.25, at=pl.pos, layer=pl.layer)
 
 
+def near(game, p):
+    """Is a place's container within reach of survivor p? (the controller's B uses this to search, not eat)"""
+    st = _st(game)
+    return st is not None and _near(st, p) is not None
+
+
 def open_near(game, p):
     """main.interact (E / B): search the container at hand. True if there was one."""
     st = _st(game)

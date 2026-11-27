@@ -262,6 +262,10 @@ def _open(g, p, u, kind=""):
     for s in list(over.ponds) + list(over.exits):
         if _dist(s.position, mid) < 200:
             return False
+    import explore      # places to discover (made just before the lairs): a lair never crowds one
+    ex = explore._st(g)
+    if ex is not None and any(pl.layer == "over" and _dist(pl.pos, mid) < 400 for pl in ex.places):
+        return False
     skip = LAIR_PROPS.get(kind, ())
     small = 0 if kind == "mire" else 26           # (the Mire is all reeds and glowcaps)
     return (_clear_of_things(over, x, y, 40, small, skip)
