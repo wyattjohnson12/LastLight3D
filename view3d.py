@@ -12,7 +12,9 @@ collisions, AI, crafting and networking are untouched. Only the drawing is diffe
   * Everything else that stands up (survivors, zombies, animals, bosses, lanterns, gates...) is a
     "cut-out" - the same painted picture, stood upright and turned to face the camera. Animals, bosses,
     survivors and zombies are real low-poly 3D models (models3d.py, built in Blender - docs/MODELS.md).
-  * Walls (cave walls and the walls you build) are real 3D blocks.
+  * Walls (cave walls and the walls you build) are real 3D blocks, lit like everything else, with a
+    little surface pattern of their own drawn by the shader (planks, stone blocks, iron plates, rock).
+  * Light, shade and fog for everything come from one shared shader library (lighting3d.py).
 
 Two small custom shaders do the work, fed by the same arcade SpriteLists the 2D game already uses,
 so there is no second copy of the world to keep in sync.
@@ -27,6 +29,7 @@ from pyglet import gl
 from pyglet.math import Mat4, Vec3
 
 import fx3d
+import lighting3d
 import models3d
 import shapes3d
 import terrain3d
@@ -39,6 +42,10 @@ TAN = math.tan(math.radians(FOV) / 2)
 UP = 1 / math.cos(PITCH)       # stretch upright cut-outs so they look as tall as in the 2D game
 WALL_KINDS = ("wood_wall", "stone_wall", "iron_wall")
 WALL_SIDES = {"wood_wall": (118, 80, 46), "stone_wall": (128, 128, 132), "iron_wall": (150, 156, 168)}
+# the surface pattern WALL_FS draws on each kind of wall (kinds without one are plain; bricks are for
+# terrain.py's brick wall)
+WALL_PATTERN = {"wood_wall": 1, "stone_wall": 2, "iron_wall": 3, "brick_wall": 5}
+CAVE_PATTERN = 4
 TRUNK_LIFT = 34                # sprite.depth of a standing tree (stumps are 0) - shapes3d picks the shape by it
 HIVE_LIFT = 16                 # beehives hang under the canopy (tilted-camera cut-out)
 HIVE_Z = 64                    # beehives: how high the bottom of the 3D hive hangs
@@ -169,6 +176,9 @@ void main() {
 }
 """
 
+# lighting3d.py is pasted in when the programs are built. Flat pictures have no real facing, so the night's
+# point lights light them all round. Things lying on the ground are drawn in the "ground" stage (no light
+# here - the light map does it), cut-outs in the "lit" stage (see lighting3d.py).
 SPRITE_FS = """
 #version 330
 uniform sampler2D sprite_texture;
@@ -180,37 +190,158 @@ in vec2 gs_uv;
 in vec4 gs_color;
 out vec4 f_color;
 void main() {
+    vec3 p = lt_world();
     if (mode == 1) {
         float d = dot(gs_uv, gs_uv);
         if (d > 1.0) discard;
         float k = 1.0 - d;
         k = k * k * (3.0 - 2.0 * k);         // smooth soft edge, darker core
-        f_color = vec4(0.0, 0.0, 0.0, k * 0.5 * shade * gs_color.a * spritelist_color.a);
+        f_color = vec4(0.0, 0.0, 0.0, k * 0.5 * shade * gs_color.a * spritelist_color.a * (1.0 - lt_fog_k(p)));
         return;
     }
     vec4 t = texture(sprite_texture, gs_uv);
     if (t.a <= alpha_cut) discard;      // also drops the painted-on shadows of the 2D art
-    f_color = t * gs_color * spritelist_color;
+    vec4 c = t * gs_color * spritelist_color;
+    f_color = vec4(lt_fogged(c.rgb * lt_light(p, vec3(0.0)), p), c.a);
 }
 """
 
+# Plain coloured triangles (terrain.py's rivers, roads and cliffs - their shading is baked into the colours):
+# the time of day, point lights (on the cliffs) and fog come from lighting3d.py.
 BOX_VS = """
 #version 330
 uniform WindowBlock { mat4 projection; mat4 view; } window;
 in vec3 in_pos;
 in vec4 in_col;
 out vec4 v_col;
+out vec3 v_pos;
 void main() {
     gl_Position = window.projection * window.view * vec4(in_pos, 1.0);
     v_col = in_col;
+    v_pos = in_pos;
 }
 """
 
 BOX_FS = """
 #version 330
 in vec4 v_col;
+in vec3 v_pos;
 out vec4 f_color;
-void main() { f_color = v_col; }
+void main() {
+    vec3 rgb = v_col.rgb * lt_light(v_pos, lt_face(v_pos));
+    f_color = vec4(lt_fogged(rgb, v_pos), v_col.a);
+}
+"""
+
+# The sides of wall blocks (built walls, cave walls): real normals, sun + hemisphere + a soft fill from the
+# camera's side (so the faces you look at read clearly, like the old baked shades), darker towards the
+# foot, the night's point lights, fog - and a surface pattern made from the world position, so nothing
+# is stored per wall: 1 wood planks, 2 stone blocks, 3 riveted iron plates, 4 rough cave rock, 5 bricks.
+WALL_VS = """
+#version 330
+uniform WindowBlock { mat4 projection; mat4 view; } window;
+in vec3 in_pos;
+in vec3 in_nrm;
+in vec4 in_col;      // colour ; pattern
+in float in_h;       // 0 at the foot of the wall, 1 at the top
+out vec3 v_pos;
+out vec3 v_nrm;
+out vec3 v_col;
+flat out int v_pat;
+out float v_h;
+void main() {
+    gl_Position = window.projection * window.view * vec4(in_pos, 1.0);
+    v_pos = in_pos;
+    v_nrm = in_nrm;
+    v_col = in_col.rgb;
+    v_pat = int(in_col.a + 0.5);
+    v_h = in_h;
+}
+"""
+
+WALL_FS = """
+#version 330
+in vec3 v_pos;
+in vec3 v_nrm;
+in vec3 v_col;
+flat in int v_pat;
+in float v_h;
+out vec4 f_color;
+float wh(vec2 p) {          // a hash that stays steady for big world coordinates
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+float wnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(wh(i), wh(i + vec2(1.0, 0.0)), f.x), mix(wh(i + vec2(0.0, 1.0)), wh(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float wfbm(vec2 p) { return wnoise(p) * 0.57 + wnoise(p * 2.03 + 7.1) * 0.29 + wnoise(p * 4.01 + 3.7) * 0.14; }
+// 1 inside a cell of a size.x x size.y grid, falling to 0 over `e` px at its edges (mortar, seams)
+float cell_in(vec2 st, vec2 size, float e) {
+    vec2 f = fract(st / size) * size;
+    vec2 d = min(f, size - f);
+    return smoothstep(0.0, e, min(d.x, d.y));
+}
+// the wall's colour at this spot. st = (along the face, height) in world pixels
+vec3 pattern(vec2 st, vec3 base) {
+    if (v_pat == 1) {               // wood: horizontal planks of random lengths, grain, dark seams
+        float row = floor(st.y / 10.0);
+        float u = st.x + wh(vec2(row, 3.0)) * 60.0;
+        float seg = floor(u / 52.0);
+        float fy = fract(st.y / 10.0), fx = fract(u / 52.0) * 52.0;
+        float seam = smoothstep(0.0, 0.14, fy) * smoothstep(1.0, 0.86, fy) * smoothstep(0.0, 1.2, min(fx, 52.0 - fx));
+        float tone = 0.86 + 0.24 * wh(vec2(row, seg));
+        float grain = wnoise(vec2(u * 0.09, st.y * 1.3)) * 0.18 + wnoise(vec2(u * 0.4, st.y * 2.5)) * 0.06;
+        return base * tone * (0.92 + grain) * mix(0.55, 1.0, seam);
+    }
+    if (v_pat == 2) {               // stone: blocks in a running bond, mortar lines, speckles
+        float row = floor(st.y / 15.0);
+        vec2 q = vec2(st.x + mod(row, 2.0) * 11.0, st.y);
+        float m = cell_in(q, vec2(22.0, 15.0), 1.6);
+        float tone = 0.84 + 0.26 * wh(floor(q / vec2(22.0, 15.0)) + 5.0);
+        float sp = wnoise(st * 0.45) * 0.14 + wnoise(st * 1.7) * 0.06;
+        float bevel = 1.0 + 0.08 * smoothstep(0.6, 1.0, fract(q.y / 15.0)) * m;       // a lit top edge
+        return base * mix(0.6, tone * (0.92 + sp) * bevel, m);
+    }
+    if (v_pat == 3) {               // iron: plates with seams, rivets in the corners, brushed streaks, rust
+        vec2 size = vec2(32.0, 30.0);
+        vec2 f = fract(st / size) * size;
+        float m = cell_in(st, size, 1.2);
+        vec2 r = min(f, size - f);
+        float rv = 1.0 - smoothstep(1.3, 2.1, length(r - vec2(4.0)));
+        float tone = 0.9 + 0.12 * wh(floor(st / size) + 9.0);
+        float streak = wnoise(vec2(st.x * 0.7, st.y * 0.05)) * 0.12;
+        vec3 c = base * tone * (0.92 + streak) * mix(0.5, 1.0, m);
+        c = mix(c, c * 1.35 + 0.05, rv);
+        float rust = (1.0 - v_h) * (1.0 - v_h) * smoothstep(0.45, 0.8, wfbm(st * 0.08));
+        return mix(c, vec3(0.42, 0.25, 0.15), rust * 0.55);
+    }
+    if (v_pat == 4) {               // cave rock: lumpy, layered, a few cracks
+        float f = wfbm(st * 0.045) + 0.45 * wfbm(st * 0.16 + 11.0);
+        float strata = 0.05 * sin(st.y * 0.22 + wfbm(st * 0.03) * 6.0);
+        float crack = smoothstep(0.035, 0.0, abs(wnoise(st * 0.035 + 2.0) - 0.5));
+        return base * (0.62 + 0.52 * f + strata) * (1.0 - 0.45 * crack);
+    }
+    if (v_pat == 5) {               // bricks: small blocks, light mortar
+        float row = floor(st.y / 7.5);
+        vec2 q = vec2(st.x + mod(row, 2.0) * 8.0, st.y);
+        float m = cell_in(q, vec2(16.0, 7.5), 1.0);
+        float tone = 0.84 + 0.26 * wh(floor(q / vec2(16.0, 7.5)) + 2.0) + wnoise(st * 0.8) * 0.08;
+        return mix(vec3(0.62, 0.6, 0.56), base * tone, m);
+    }
+    return base;
+}
+void main() {
+    vec3 n = normalize(v_nrm);
+    vec2 st = vec2(abs(n.x) > 0.5 ? v_pos.y : v_pos.x, v_pos.z);
+    vec3 alb = pattern(st, v_col);
+    float ao = mix(0.5, 1.0, v_h);          // darker towards the foot (the old blocks had this baked in)
+    vec3 day = (0.62 * lt_hemi(n) + 0.38 * max(dot(n, lt_fill.xyz), 0.0) + 0.25 * max(dot(n, lt_sun.xyz), 0.0)) * ao;
+    vec3 rgb = alb * day * lt_light(v_pos, n);
+    f_color = vec4(lt_fogged(rgb, v_pos), 1.0);
+}
 """
 
 
@@ -354,9 +485,10 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
         vs = open(arcade.resources.resolve(":system:shaders/sprites/sprite_list_geometry_vs.glsl")).read()
         ctx = self.ctx
         hlib = lib + terrain3d.GLSL          # HILLS: ground_z() in every world shader (terrain3d.py)
-        flat = ctx.program(vertex_shader=vs, geometry_shader=FLAT_GEO.replace("%LIB%", hlib), fragment_shader=SPRITE_FS)
+        fs = lighting3d.inject(SPRITE_FS, frag=True)     # light + fog in every world shader (lighting3d.py)
+        flat = ctx.program(vertex_shader=vs, geometry_shader=FLAT_GEO.replace("%LIB%", hlib), fragment_shader=fs)
         bill = ctx.program(vertex_shader=vs, geometry_shader=terrain3d.inject(BILL_GEO.replace("%LIB%", hlib), "0.0"),
-                           fragment_shader=SPRITE_FS)
+                           fragment_shader=fs)
         for p in (flat, bill):
             p["sprite_texture"] = 0
             p["uv_texture"] = 1
@@ -371,7 +503,10 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
         bill["fp"] = 0
         bill["face_right"] = (1.0, 0.0)
         bill["shade"] = 1.0
-        self._progs3d = (flat, bill, ctx.program(vertex_shader=BOX_VS, fragment_shader=BOX_FS))
+        box = ctx.program(vertex_shader=BOX_VS, fragment_shader=lighting3d.inject(BOX_FS, frag=True))
+        self._progs3d = (flat, bill, box)
+        self._wall_prog = ctx.program(vertex_shader=WALL_VS, fragment_shader=lighting3d.inject(WALL_FS, frag=True))
+        self._lt = lighting3d.LightState(ctx)
         # 3D shapes (shapes3d.py): with OpenGL 4 one draw call makes every pass of a shape (geometry shader
         # invocations); on plain 3.3 we fall back to one draw per pass
         self._mesh_lib, self._mesh_vs = hlib, vs
@@ -384,7 +519,9 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
             self._mesh_progs = {}
             self._mesh_prog(1)
         self._mesh_t0 = time.perf_counter()
-        self._hill_init(vs, hlib, SPRITE_FS)
+        self._hill_init(vs, hlib + lighting3d.glsl(), fs)
+        for p in (flat, bill, box, self._wall_prog, self._hill_prog):
+            lighting3d.bind(p)
         self._kinds3d = {}
         self._ghost3d = arcade.SpriteList()
         self._wall_sig = {}
@@ -405,6 +542,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
             p["inflate"] = 1.0
             p["glow_pass"] = 0
             p["ShapeBlock"] = shapes3d.BINDING
+            lighting3d.bind(p)
             self.hill_apply(p)              # HILLS (terrain3d.py)
             self._mesh_progs[key] = p
         return p
@@ -509,31 +647,41 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
                 self.mesh(sub, kind, blend=blend, glow=True)
 
     # ------------------------------------------------------------------ 3D blocks
-    def _box(self, out, x0, y0, x1, y1, h, col, faces, ground=None):
-        """Side faces of a block (the top is the sprite, drawn flat at height h).
+    def _box(self, out, x0, y0, x1, y1, h, col, faces, ground=None, pattern=0):
+        """Side faces of a block (the top is the sprite, drawn flat at height h), for WALL_VS / WALL_FS:
+        position, normal, colour + pattern, height 0..1 per vertex - the shader does all the shading.
         ground(x, y): HILLS - the bottom follows the ground at each corner, the top sits level h above the
         ground under the centre (the flat shader puts the top sprite there too)."""
-        r, g, b = (c / 255 for c in col)
+        rgbp = tuple(c / 255 for c in col) + (float(pattern),)
         top_z = h + (ground((x0 + x1) / 2, (y0 + y1) / 2) if ground else 0.0)
 
-        def quad(a, bb, c, d, shade, dark_bottom=0.45):
-            top = (r * shade, g * shade, b * shade, 1.0)
-            bot = (r * shade * dark_bottom, g * shade * dark_bottom, b * shade * dark_bottom, 1.0)
+        def quad(a, bb, c, d, nrm):
             for (px, py, pz) in (a, bb, c, a, c, d):
                 if ground:
                     out.extend((px, py, top_z if pz > 0 else ground(px, py) - 4.0))
                 else:
                     out.extend((px, py, pz))
-                out.extend(top if pz > 0 else bot)
+                out.extend(nrm)
+                out.extend(rgbp)
+                out.append(1.0 if pz > 0 else 0.0)
 
         if "s" in faces:
-            quad((x0, y0, 0), (x1, y0, 0), (x1, y0, h), (x0, y0, h), 1.0)
+            quad((x0, y0, 0), (x1, y0, 0), (x1, y0, h), (x0, y0, h), (0.0, -1.0, 0.0))
         if "e" in faces:
-            quad((x1, y0, 0), (x1, y1, 0), (x1, y1, h), (x1, y0, h), 0.72)
+            quad((x1, y0, 0), (x1, y1, 0), (x1, y1, h), (x1, y0, h), (1.0, 0.0, 0.0))
         if "w" in faces:
-            quad((x0, y1, 0), (x0, y0, 0), (x0, y0, h), (x0, y1, h), 0.72)
+            quad((x0, y1, 0), (x0, y0, 0), (x0, y0, h), (x0, y1, h), (-1.0, 0.0, 0.0))
         if "n" in faces:
-            quad((x1, y1, 0), (x0, y1, 0), (x0, y1, h), (x1, y1, h), 0.6)
+            quad((x1, y1, 0), (x0, y1, 0), (x0, y1, h), (x1, y1, h), (0.0, 1.0, 0.0))
+
+    def _block_geo(self, data):
+        """Wall blocks made by _box, for the wall program. (_geo below stays the plain coloured-triangle
+        format terrain.py uses.)"""
+        if not data:
+            return None
+        buf = self.ctx.buffer(data=array("f", data))
+        return self.ctx.geometry([BufferDescription(buf, "3f 3f 4f 1f", ["in_pos", "in_nrm", "in_col", "in_h"])],
+                                 mode=self.ctx.TRIANGLES)
 
     def _geo(self, data):
         if not data:
@@ -563,8 +711,9 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
                 faces += "n"
             if faces:
                 self._box(out, x * C, y * C, x * C + C, y * C + C, CAVE_WALL_HEIGHT,
-                          getattr(L, "wall_col", (96, 84, 78)), faces)      # a layer may tint its rock
-        geo = self._wall_geo[key] = self._geo(out)
+                          getattr(L, "wall_col", (96, 84, 78)), faces,      # a layer may tint its rock
+                          pattern=CAVE_PATTERN)
+        geo = self._wall_geo[key] = self._block_geo(out)
         return geo
 
     def _built_walls(self, L):
@@ -578,8 +727,9 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
                 s.depth = -1
                 hw, hh = s.width / 2, s.height / 2
                 self._box(out, s.center_x - hw, s.center_y - hh, s.center_x + hw, s.center_y + hh,
-                          BUILD_WALL_HEIGHT, WALL_SIDES[s.kind], "sewn", hg.at if hg is not None else None)
-            self._wall_geo[L.name] = self._geo(out)
+                          BUILD_WALL_HEIGHT, WALL_SIDES[s.kind], "sewn", hg.at if hg is not None else None,
+                          WALL_PATTERN.get(s.kind, 0))
+            self._wall_geo[L.name] = self._block_geo(out)
         return self._wall_geo.get(L.name)
 
     # ------------------------------------------------------------------ trees
@@ -605,6 +755,46 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
                 want = HIVE_Z if up else 0
                 if n.depth != want:
                     n.depth = want
+
+    # ------------------------------------------------------------------ light + fog (lighting3d.py)
+    def _lt_frame(self, L, vl, dk, sx, sy, fp):
+        """Fill this view's LightBlock: camera, time-of-day ambient, sun, rim, point lights and fog.
+        Call with the 3D camera on (it reads the matrices and the viewport)."""
+        st = self._lt
+        st.inv = tuple(~(self.projection @ self.view))
+        st.vp = tuple(float(v) for v in self.ctx.viewport)
+        (ex, ey, ez), f, _, _, d, _, _ = self._basis()
+        st.eye = (ex, ey, ez)
+        on = self.fx_lighting_on(vl, dk)
+        st.amb = tuple(self.fx_ambient(vl)) if on else (1.0, 1.0, 1.0)
+        lx, ly, lz = -sx, -sy, 1.4
+        n = math.sqrt(lx * lx + ly * ly + lz * lz)
+        st.sun = (lx / n, ly / n, lz / n)
+        fx, fy = -f[0], -f[1]                       # the fill comes from behind the camera
+        n = math.hypot(fx, fy) or 1.0
+        fx, fy = fx / n * 0.96, fy / n * 0.96
+        st.fill = (fx, fy, 0.29)
+        rim = lighting3d.FILL_RIM_NIGHT if vl == "over" else lighting3d.FILL_RIM_CAVE
+        st.rim = tuple(c * 0.55 * dk for c in rim)
+        # point lights: the same sources as the light map (fx3d.fx_light_data), nearest first
+        data = self.fx_light_data(L, vl, dk) if on else []
+        self._lt_data = data
+        own = tuple(self.cam_pos) if self.cut else self.view_pos()
+        st.lights = lighting3d.pick_lights(data, self.view_pos(), self.ground_z, own)
+        # fog: the biome's haze (the layer's, underground), foggy / rainy weather; first person fades into
+        # the sky at the horizon
+        haze = self.biome_fog() if hasattr(self, "layout") else None
+        kind, k = getattr(self, "weather_shown", None), getattr(self, "weather_k", 0.0)
+        over = vl == "over"
+        horizon = lighting3d.FP_HORIZON
+        if not over:
+            import biomes
+            info = biomes.LAYER_INFO.get(vl)
+            horizon = (info and info.sky) or (22, 18, 16)
+            haze = haze or horizon + (40,)
+        st.fog, st.fogk = lighting3d.fog_params(fp, d, haze,
+                                                k if over and kind == "fog" else 0.0,
+                                                k if over and kind in ("rain", "storm") else 0.0, horizon)
 
     # ------------------------------------------------------------------ the frame
     def draw_world_3d(self, L, vl):
@@ -632,6 +822,8 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
             self.fp_hide_me(True)
         self.use_world3d()
         gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
+        self._lt_frame(L, vl, dk, sx, sy, fp)    # lighting3d.py: lights, fog, camera for this view
+        self._lt.write("ground")
 
         # ---- on the ground
         if hilly:       # HILLS: the ground is a heightfield; what lies on it is depth tested against it
@@ -673,15 +865,20 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
             k = t / dur
             self.ground_ring(x, y, r0 + (r1 - r0) * k, col + (int(230 * (1 - k)),), 6 * (1 - k) + 2)
 
+        # ---- time of day: colour grading + light map over the ground (fx3d.py) - replaces the old darkness
+        # sheet. Everything from here on stands up and lights itself (lighting3d.py "lit" stage).
+        self.fx_lighting(L, vl, dk, self._lt_data)
+        self.use_world3d()
+        self._lt.write("lit")
+
         # ---- standing up (depth tested so blocks hide what's behind them)
         ctx.enable(ctx.DEPTH_TEST)
         gl.glDepthFunc(gl.GL_LEQUAL)
-        box = self._progs3d[2]
         if cave_geo:
-            cave_geo.render(box)
+            cave_geo.render(self._wall_prog)
             self.flat(L.walls, CAVE_WALL_HEIGHT, boxes=True)
         if built_geo:
-            built_geo.render(box)
+            built_geo.render(self._wall_prog)
             self.flat(L.builds, BUILD_WALL_HEIGHT, boxes=True)
         if vl != "over":
             self.stand(L.exits)
@@ -743,16 +940,15 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
                 ctx.disable(ctx.DEPTH_TEST)
                 self.ground_ring(t.center_x, t.center_y, 30, (255, 150, 190, 200), 2)
         ctx.enable(ctx.DEPTH_TEST)
-        self.fx_draw_particles(vl, additive=False)    # chips, dust, blood, smoke (lit by the light map)
+        self.fx_draw_particles(vl, additive=False)    # chips, dust, blood, smoke (lit like the rest)
         ctx.disable(ctx.DEPTH_TEST)
+        self._lt.write("glow")      # glows from here on: not darkened, faded out (not fogged) far away
 
         # ---- floating things, drawn on screen at their 3D spot
         self.gui.use()
         self.draw_air_hazards()
         self.draw_pet_marks(L)
 
-        # ---- time of day: colour grading + light map (fx3d.py) - replaces the old darkness sheet
-        self.fx_lighting(L, vl, dk)
         if dk > 0:
             self.use_world3d()
             for g in L.glows:      # a warm haze over each fire (the light map already lights the ground)
@@ -792,6 +988,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
         ctx.disable(ctx.DEPTH_TEST)
         self.gui.use()
         self.post_end(dk)            # post3d.py: bloom + colour grade onto the screen (HUD etc. come after)
+        self.fx_vignette(dk)         # fx3d.py: night vignette on the finished picture (not bloomed)
 
         self.draw_weather_3d(vl)  # weather.py: rain / snow / fog and the season's tint
         self.draw_repair_bars(L)  # repair.py: holding the hammer shows how hurt buildings are

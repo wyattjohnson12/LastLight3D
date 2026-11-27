@@ -64,6 +64,8 @@ import math
 import random
 import struct
 
+import lighting3d
+
 MAX_RINGS = 160
 MAX_PARTS = 56
 MAX_BANDS = 224
@@ -236,6 +238,7 @@ MESH_FS = """
 uniform sampler2D sprite_texture;
 uniform vec4 spritelist_color;
 uniform float alpha_cut;
+uniform int glow_pass;
 in vec2 gs_uv;
 in float gs_shade;
 flat in uint gs_rgba;
@@ -255,7 +258,20 @@ void main() {
             rgb = t.rgb;
         }
     }
-    f_color = vec4(rgb * col.rgb * gs_shade, col.a) * spritelist_color;
+    rgb *= col.rgb;
+    // lighting3d.py (pasted in by program_sources): gs_shade is the sun shading from the geometry shader;
+    // here the hemisphere tint, the time of day, the night's point lights, a faint rim and the fog. The
+    // position comes from the depth buffer and the normal from the flat face, so the geometry shader
+    // (already at the GPU's output limit) passes nothing extra.
+    vec3 p = lt_world();
+    if (glow_pass == 1) {
+        rgb = lt_fogged(rgb * gs_shade, p);
+    } else {
+        vec3 n = lt_face(p);
+        rgb = rgb * gs_shade * lt_hemi(n) * lt_light(p, n) + 0.5 * lt_rimlight(p, n) * (0.3 + rgb);
+        rgb = lt_fogged(rgb, p);
+    }
+    f_color = vec4(rgb, col.a) * spritelist_color;
 }
 """
 
@@ -273,7 +289,7 @@ def program_sources(lib, invocations=None, verts=MAX_VERTS):
         geo = geo.replace("%PASS%", "pass_id").replace("%PASSUNI%", "uniform int pass_id;")
     geo = (geo.replace("%LIB%", lib).replace("%VERTS%", str(verts)).replace("%RINGS%", str(MAX_RINGS))
            .replace("%PARTS%", str(MAX_PARTS)).replace("%BANDS2%", str(MAX_BANDS // 2)).replace("%INVS%", str(MAX_INV)))
-    return geo, MESH_FS
+    return geo, lighting3d.inject(MESH_FS, frag=True)
 
 
 # =========================================================================== building blocks

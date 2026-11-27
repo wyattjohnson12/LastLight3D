@@ -31,6 +31,8 @@ from array import array
 
 from arcade.gl import BufferDescription
 
+import lighting3d
+
 UNIT = 55.0                 # game pixels per Blender metre
 HERE = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(HERE, "assets", "models")
@@ -264,7 +266,6 @@ uniform vec4 a0;      // stride, bob, nod, breathe
 uniform vec4 a1;      // wag, flap, hover, float
 uniform vec4 a2;      // lunge, sway, arms (0 none 1 swing 2 reach), jaw
 uniform float time;
-uniform vec3 light;
 uniform float up_k;   // stretch heights (tilted camera)
 in vec3 in_pos;
 in vec3 in_nrm;
@@ -280,7 +281,11 @@ in vec3 i_acc2;
 in vec3 i_acc3;
 in vec3 i_acc4;
 in vec3 i_acc5;
-out vec4 v_col;
+out vec4 v_col;       // colour (lit in the fragment shader - lighting3d.py)
+out vec3 v_pos;       // world position
+out vec3 v_nrm;
+out float v_glow;     // 1: emissive material (not shaded)
+out float v_flash;    // white hit flash
 
 mat3 rotY(float a) { float c = cos(a), s = sin(a); return mat3(c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c); }
 mat3 rotZ(float a) { float c = cos(a), s = sin(a); return mat3(c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0); }
@@ -288,7 +293,11 @@ mat3 rotX(float a) { float c = cos(a), s = sin(a); return mat3(1.0, 0.0, 0.0, 0.
 
 void main() {
     int opt = int(in_info.z + 0.5) - 1;
-    if (opt >= 0 && ((int(i_c.x + 0.5) >> opt) & 1) == 0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); v_col = vec4(0.0); return; }
+    if (opt >= 0 && ((int(i_c.x + 0.5) >> opt) & 1) == 0) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0); v_col = vec4(0.0);
+        v_pos = vec3(0.0); v_nrm = vec3(0.0, 0.0, 1.0); v_glow = 0.0; v_flash = 0.0;
+        return;
+    }
     int role = int(in_info.x + 0.5);
     float ph = i_b.y * 6.2831853;
     float mv = i_b.z, at = i_b.w, seed = i_c.y;
@@ -331,18 +340,37 @@ void main() {
     vec3 col = in_col;
     vec3 acc = mk == 2 ? i_acc1 : mk == 3 ? i_acc2 : mk == 4 ? i_acc3 : mk == 5 ? i_acc4 : mk == 6 ? i_acc5 : vec3(-1.0);
     if (acc.r >= 0.0) col = acc;
-    float lit = mk == 1 ? 1.15 : 0.6 + 0.5 * max(dot(n, light), 0.0) + 0.08 * n.z;
-    v_col = vec4(col * lit * i_tint.rgb + vec3(0.45) * i_c.w, i_tint.a);
+    v_col = vec4(col * i_tint.rgb, i_tint.a);
+    v_pos = w;
+    v_nrm = n;
+    v_glow = mk == 1 ? 1.0 : 0.0;
+    v_flash = i_c.w;
 }
 """
 
+# Lit per pixel (lighting3d.py is pasted in when the program is built): the sun as before, a sky / ground
+# hemisphere instead of a flat ambient, the night's point lights (fires, torches) and a moonlight rim.
 FS = """
 #version 330
+uniform vec3 light;   // towards the sun
 in vec4 v_col;
+in vec3 v_pos;
+in vec3 v_nrm;
+in float v_glow;
+in float v_flash;
 out vec4 f_color;
 void main() {
     if (v_col.a <= 0.01) discard;
-    f_color = v_col;
+    vec3 n = normalize(v_nrm);
+    vec3 rgb;
+    if (v_glow > 0.5) {
+        rgb = v_col.rgb * 1.15 * lt_light(v_pos, vec3(0.0));
+    } else {
+        vec3 sun = (0.6 + 0.08 * n.z) * lt_hemi(n) + 0.5 * max(dot(n, light), 0.0);
+        rgb = v_col.rgb * sun * lt_light(v_pos, n) + lt_rimlight(v_pos, n) * (0.35 + v_col.rgb);
+    }
+    rgb += vec3(0.45) * v_flash;
+    f_color = vec4(lt_fogged(rgb, v_pos), v_col.a);
 }
 """
 
@@ -441,7 +469,8 @@ class CreatureModels:
         if getattr(self, "_m3_prog", None):
             return
         ctx = self.ctx
-        self._m3_prog = ctx.program(vertex_shader=VS, fragment_shader=FS)
+        self._m3_prog = ctx.program(vertex_shader=VS, fragment_shader=lighting3d.inject(FS, frag=True))
+        lighting3d.bind(self._m3_prog)
         self._m3_gpu = {}           # model name -> [geometry, instance buffer, capacity]
         self._m3_frame = {}         # model name -> list of instance floats (this view)
         self._m3_spots = []         # (model, point, inst) glows to light at night

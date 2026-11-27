@@ -21,6 +21,7 @@ from arcade.gl import BufferDescription
 from arcade.gl.geometry import quad_2d_fs
 from pyglet import gl
 
+import lighting3d
 import terrain3d
 from settings import *
 
@@ -106,6 +107,10 @@ void main() {
     vec4 q = mvp * vec4(c, 1.0);
     vec2 k[4] = vec2[4](vec2(-1.0, 1.0), vec2(-1.0, -1.0), vec2(1.0, 1.0), vec2(1.0, -1.0));
     g_col = v_col[0];
+    if (ground == 0) {      // lighting3d.py: smoke and chips take the night + nearby fires, and the fog
+        vec3 p = c + vec3(0.0, 0.0, ground_foot(c.xy, 0.0));
+        g_col.rgb = lt_fogged(g_col.rgb * lt_light(p, vec3(0.0)), p);
+    }
     for (int i = 0; i < 4; i++) {
         g_uv = k[i];
         if (ground == 1) {
@@ -155,10 +160,11 @@ COMP_FS = """
 #version 330
 uniform sampler2D light;
 uniform float vignette;
+uniform int use_map;     // 0: just the vignette (drawn at the end of the frame)
 in vec2 uv;
 out vec4 f_color;
 void main() {
-    vec3 l = texture(light, uv).rgb;
+    vec3 l = use_map == 1 ? texture(light, uv).rgb : vec3(1.0);
     float r = length((uv - 0.5) * vec2(1.6, 2.0));
     l *= 1.0 - vignette * smoothstep(0.55, 1.35, r);
     f_color = vec4(l, 1.0);
@@ -174,13 +180,15 @@ class FX3D:
         if getattr(self, "_fx_progs", None):
             return
         ctx = self.ctx
-        pts = ctx.program(vertex_shader=POINT_VS, geometry_shader=terrain3d.inject(POINT_GS, "0.0"),  # on the hills
-                          fragment_shader=POINT_FS)
+        gs = lighting3d.inject(terrain3d.inject(POINT_GS, "0.0"))       # on the hills, lit (lighting3d.py)
+        pts = ctx.program(vertex_shader=POINT_VS, geometry_shader=gs, fragment_shader=POINT_FS)
+        lighting3d.bind(pts)
         pts["ground"] = 0
         pts["hot"] = 0.0
         comp = ctx.program(vertex_shader=COMP_VS, fragment_shader=COMP_FS)
         comp["light"] = 0
         comp["vignette"] = 0.0
+        comp["use_map"] = 1
         self._fx_progs = (pts, comp)
         self._fx_bufs = []
         self._fx_geos = []
@@ -421,6 +429,8 @@ class FX3D:
 
     # ------------------------------------------------------------------ lighting
     def fx_light_data(self, L, vl, dk):
+        """Every light source: (x, y, height, reach, r, g, b, strength) each. The light map lays them as pools
+        on the ground; lighting3d.py also lights standing things with them, from that height."""
         k = min(1.0, dk * 1.4)
         t = self.flame_t
         out = []
@@ -431,41 +441,41 @@ class FX3D:
                     fl = 1 + 0.05 * math.sin(t * 11 + g.center_x) + 0.03 * math.sin(t * 27 + g.center_y)
                     lc = getattr(g, "light", None)        # e.g. crystal glows: their own colour (r, g, b, a)
                     if lc:
-                        ext((g.center_x, g.center_y, 0.5, g.width * 0.72 * fl) + tuple(lc[:3]) + (lc[3] * k,))
+                        ext((g.center_x, g.center_y, 22.0, g.width * 0.72 * fl) + tuple(lc[:3]) + (lc[3] * k,))
                     else:
-                        ext((g.center_x, g.center_y, 0.5, g.width * 0.72 * fl, 1.0, 0.74, 0.46, 0.95 * k))
+                        ext((g.center_x, g.center_y, 26.0, g.width * 0.72 * fl, 1.0, 0.74, 0.46, 0.95 * k))
             centre = tuple(self.cam_pos) if self.cut else self.view_pos()
             r = self.light_radius() if not self.cut else 330
             me = self.me
             if me is not None and me.alive and me.holding_torch:
                 fl = 1 + 0.04 * math.sin(t * 13) + 0.03 * math.sin(t * 31)
-                ext((centre[0], centre[1], 0.5, r * fl, 1.0, 0.86, 0.64, 1.0))
+                ext((centre[0], centre[1], 70.0, r * fl, 1.0, 0.86, 0.64, 1.0))
             else:
-                ext((centre[0], centre[1], 0.5, r, 0.92, 0.92, 0.88, 1.0))
+                ext((centre[0], centre[1], 70.0, r, 0.92, 0.92, 0.88, 1.0))
             for p in self.players.values():       # friends: a torch or a small lantern
                 if p is me or not p.alive or p.layer != vl:
                     continue
                 c = p.color
                 rr = 210 if p.holding_torch else 120
-                ext((p.sprite.center_x, p.sprite.center_y, 0.5, rr, 0.7 + c[0] / 850, 0.62 + c[1] / 850,
+                ext((p.sprite.center_x, p.sprite.center_y, 60.0, rr, 0.7 + c[0] / 850, 0.62 + c[1] / 850,
                      0.5 + c[2] / 850, 0.85 * k))
             for b in L.bosses:
-                ext((b.center_x, b.center_y, 0.5, b.radius + 120, 1.0, 0.36, 0.22, 0.6 * k))
+                ext((b.center_x, b.center_y, 50.0, b.radius + 120, 1.0, 0.36, 0.22, 0.6 * k))
             for z in L.zombies:
                 if getattr(z, "burn", 0) > 0:
-                    ext((z.center_x, z.center_y, 0.5, 90, 1.0, 0.55, 0.2, 0.7 * k))
+                    ext((z.center_x, z.center_y, 30.0, 90, 1.0, 0.55, 0.2, 0.7 * k))
             for s in self.shots:
                 if s.layer == vl and s.kind != "arrow":
-                    ext((s.x, s.y, 0.5, 120, 1.0, 0.6, 0.25, 0.8 * k))
+                    ext((s.x, s.y, 40.0, 120, 1.0, 0.6, 0.25, 0.8 * k))
             if vl != "over":                      # any underground layer: light spills down the ladders
                 for s in L.exits:
-                    ext((s.center_x, s.center_y, 0.5, 140, 1.0, 0.94, 0.8, 0.7))
+                    ext((s.center_x, s.center_y, 90.0, 140, 1.0, 0.94, 0.8, 0.7))
             else:
                 for h in self.hazards:
                     if h.kind == "fire" and h.tele <= 0:
-                        ext((h.x, h.y, 0.5, h.r * 2.4, 1.0, 0.55, 0.2, 0.9 * k))
+                        ext((h.x, h.y, 12.0, h.r * 2.4, 1.0, 0.55, 0.2, 0.9 * k))
                     elif h.kind == "meteor" and h.tele > 0:
-                        ext((h.x, h.y, 0.5, h.r * 1.8, 1.0, 0.5, 0.2, (1 - min(1.0, h.tele)) * 0.8 * k))
+                        ext((h.x, h.y, 60.0, h.r * 1.8, 1.0, 0.5, 0.2, (1 - min(1.0, h.tele)) * 0.8 * k))
         return out
 
     def fx_ambient(self, vl):
@@ -479,12 +489,17 @@ class FX3D:
             amb = tuple(min(1.0, c * FP_UNDERGROUND_LIFT + FP_UNDERGROUND_ADD) for c in amb)
         return amb
 
-    def fx_lighting(self, L, vl, dk):
+    def fx_lighting_on(self, vl, dk):
+        """Is the light map needed (anything but plain daylight)?"""
+        return dk > 0 or min(self.fx_ambient(vl)) <= 0.995
+
+    def fx_lighting(self, L, vl, dk, data=None):
         """Colour-grade the view for the time of day and light it with every light source.
-        Call after the world is drawn; leaves the GUI camera active."""
+        view3d calls this after the ground layer (lighting3d.py: standing things light themselves, after it).
+        data: fx_light_data's list, if it was already gathered this frame. Leaves the GUI camera active."""
         self._fx_init()
         amb = self.fx_ambient(vl)
-        if dk <= 0 and min(amb) > 0.995:
+        if not self.fx_lighting_on(vl, dk):
             return                                 # plain daylight: nothing to do
         ctx = self.ctx
         vp = self.camera.viewport
@@ -495,18 +510,34 @@ class FX3D:
             self._fx_fbo_tex = tex
             self._fx_fbo_size = (w, h)
         self.use_world3d()                         # same camera matrices for the light pools
-        data = self.fx_light_data(L, vl, dk)
+        data = array("f", self.fx_light_data(L, vl, dk) if data is None else data)
+        data[2::STRIDE] = array("f", [0.5]) * (len(data) // STRIDE)     # pools lie on the ground
         ctx.disable(ctx.DEPTH_TEST)
         with self._fx_fbo.activate() as fbo:
             fbo.viewport = (0, 0, w, h)
             fbo.clear(color_normalized=(amb[0], amb[1], amb[2], 1.0))
             if data:
-                self._fx_points(0, array("f", data), ground=1, blend=(ctx.SRC_ALPHA, ctx.ONE))
+                self._fx_points(0, data, ground=1, blend=(ctx.SRC_ALPHA, ctx.ONE))
         self.gui.use()                             # back to this view's viewport / scissor
         ctx.enable(ctx.BLEND)
         ctx.blend_func = (ctx.DST_COLOR, ctx.ZERO)  # multiply
         comp = self._fx_progs[1]
-        comp["vignette"] = 0.35 * dk
+        comp["vignette"] = 0.0
+        comp["use_map"] = 1
         self._fx_fbo_tex.use(0)
         self._fx_quad.render(comp)
+        ctx.blend_func = ctx.BLEND_DEFAULT
+
+    def fx_vignette(self, dk):
+        """Darker screen edges at night, over everything in the world (call in GUI space at the end)."""
+        if dk <= 0:
+            return
+        ctx = self.ctx
+        ctx.enable(ctx.BLEND)
+        ctx.blend_func = (ctx.DST_COLOR, ctx.ZERO)  # multiply
+        comp = self._fx_progs[1]
+        comp["vignette"] = 0.35 * dk
+        comp["use_map"] = 0
+        self._fx_quad.render(comp)
+        comp["use_map"] = 1
         ctx.blend_func = ctx.BLEND_DEFAULT

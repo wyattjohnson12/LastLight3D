@@ -28,6 +28,11 @@ SEASON_COLOR = {"spring": (150, 230, 140), "summer": (255, 220, 110), "autumn": 
                 "winter": (190, 225, 255)}
 SEASON_TINT = {"spring": (170, 255, 170, 8), "summer": (255, 235, 160, 12), "autumn": (255, 160, 80, 18),
                "winter": (225, 235, 255, 45)}
+# The 3D view's shaders fog the distance themselves (lighting3d.py: biome haze, foggy and rainy weather), so
+# the flat full-screen haze / fog sheets below only keep this much of their old strength: enough to tint the
+# whole view with the mood of the place, not so much that near things look washed out.
+FLAT_HAZE = 0.4
+FLAT_FOG = 0.35
 WEATHER_TINT = {"rain": (50, 70, 100, 50), "storm": (25, 32, 60, 80), "snow": (230, 240, 255, 30),
                 "fog": (195, 200, 210, 120)}
 SEASON_HELLO = {
@@ -242,7 +247,7 @@ class Weather:
         if vl != "over":                 # underground: just the layer's own haze (biomes.LayerInfo.fog)
             fog = self.biome_fog() if hasattr(self, "layout") else None
             if fog:
-                arcade.draw_lrbt_rectangle_filled(0, W, 0, H, fog)
+                arcade.draw_lrbt_rectangle_filled(0, W, 0, H, fog[:3] + (int(fog[3] * FLAT_HAZE),))
             return
         if not hasattr(self, "weather_shown"):
             return
@@ -250,7 +255,8 @@ class Weather:
         arcade.draw_lrbt_rectangle_filled(0, W, 0, H, (r, g, b, a))
         fog = self.biome_fog() if hasattr(self, "layout") else None   # biomes.py: the biome's haze (blended)
         if fog:
-            arcade.draw_lrbt_rectangle_filled(0, W, 0, H, fog[:3] + (int(fog[3] * (1 - 0.5 * self.darkness)),))
+            a = fog[3] * FLAT_HAZE * (1 - 0.5 * self.darkness)
+            arcade.draw_lrbt_rectangle_filled(0, W, 0, H, fog[:3] + (int(a),))
         k = self.weather_k
         kind = self.weather_shown
         if k <= 0.01:
@@ -259,11 +265,8 @@ class Weather:
         night = 1 - 0.6 * self.darkness
         if tint:
             r, g, b, a = tint
-            arcade.draw_lrbt_rectangle_filled(0, W, 0, H, (r, g, b, int(a * k * (night if kind == "fog" else 1))))
-            if kind == "fog":      # thicker further away (the top of the screen is the far distance)
-                for i in range(6):
-                    y0 = H * (0.45 + i * 0.09)
-                    arcade.draw_lrbt_rectangle_filled(0, W, y0, H, (r, g, b, int(22 * k * night)))
+            a = a * k * (night * FLAT_FOG if kind == "fog" else 1)     # fog: thicker far away is the shaders' job
+            arcade.draw_lrbt_rectangle_filled(0, W, 0, H, (r, g, b, int(a)))
         drops = self.weather_drops
         n = int(len(drops) * k)
         if n and kind in ("rain", "storm"):

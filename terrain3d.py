@@ -114,7 +114,7 @@ void main() {
                 float z = hg.r;
                 vec3 n = normalize(vec3(-hg.g, -hg.b, 1.0));     // slope baked into the texture
                 float shade = clamp(1.0 + 1.15 * (dot(n, L) - L.z), 0.55, 1.2);
-                gs_color = vec4(v_color[0].rgb * shade, v_color[0].a);
+                gs_color = vec4(v_color[0].rgb * shade * lt_hemi(n) / lt_sky.rgb, v_color[0].a);   // lighting3d.py
                 gs_uv = mix(mix(uv2, uv3, st.x), mix(uv0, uv1, st.x), st.y);
                 gl_Position = mvp * vec4(p, z, 1.0);
                 EmitVertex();
