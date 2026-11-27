@@ -78,9 +78,10 @@ class Options:
 
     # ------------------------------------------------------------------ difficulty
     def chosen_difficulty(self):
-        """What the title screen is set to: (name, day seconds, night seconds, nights between bosses)."""
+        """What the title screen is set to: (name, day seconds, night seconds, nights before a boss wakes by
+        itself). The last one is saved as "boss_wake" (the old "boss_gap" meant a boss every N nights)."""
         name = self.cfg.get("difficulty", DEFAULT_DIFFICULTY)
-        gap = clamp_gap(self.cfg.get("boss_gap", BOSS_EVERY))
+        gap = clamp_gap(self.cfg.get("boss_wake", BOSS_WAKE_NIGHTS))
         if name == "Custom":
             day, night = self.custom_times()
             return "Custom", day, night, gap
@@ -89,7 +90,7 @@ class Options:
         return (name,) + PRESETS[name] + (gap,)
 
     def nudge_gap(self, amount):
-        self.cfg["boss_gap"] = clamp_gap(self.chosen_difficulty()[3] + (1 if amount > 0 else -1))
+        self.cfg["boss_wake"] = clamp_gap(self.chosen_difficulty()[3] + (1 if amount > 0 else -1))
         self.save_cfg()
 
     def custom_times(self):
@@ -110,8 +111,9 @@ class Options:
 
     @property
     def boss_gap(self):
-        """Nights between one boss being killed and the next one rising (also the night the first one comes)."""
-        return int(self.difficulty[3]) if len(self.difficulty) > 3 else BOSS_EVERY
+        """The backstop (lairs.py): nights without anyone waking or beating a boss before the next one wakes by
+        itself and comes for you (also the night that happens first in a new game)."""
+        return int(self.difficulty[3]) if len(self.difficulty) > 3 else BOSS_WAKE_NIGHTS
 
     @property
     def day_night(self):

@@ -16,6 +16,7 @@ calls its hooks. If you are adding a biome, you should only need to edit your ow
 | Crystal Hollows (layer `"deep"`, reached from the cave) | `hollows.py` | `hollows` | 60 |
 | Hills (ground height map) | `hills.py` | `hills` | 70 |
 | Places to discover (camps, ruins, graves... + recipes to find) | `explore.py` | `explore` | 80 |
+| Boss lairs (one per boss, in its biome; wake them at the altar) | `lairs.py` | `lairs` | 90 |
 
 ## The layout (worldgen 2)
 
@@ -26,7 +27,8 @@ calls its hooks. If you are adding a biome, you should only need to edit your ow
   The seed rotates the ring. Each wedge covers about 14-23% of the map, and the forest about 14%.
 * Borders are warped with noise (`biomes.fbm`), so they're organic. Small exclaves can happen.
 * `game.biome_at((x, y))` returns the region name (on other layers it returns the layer name).
-  `game.layout.centres[name]` is a spot well inside each region; use it for boss lairs and landmarks.
+  `game.layout.centres[name]` is a spot well inside each region; use it for landmarks (`lairs.py` puts each
+  boss's lair near its biome's centre: the lairs keep their own sprite lists and add no nodes).
 * `game.biome_weights(pos, radius)` returns `{biome: share}` from 9 samples. It blends things across
   borders, and the ground tint already uses it (`biomes.blend_tint`).
 * Legacy worlds (worldgen 1) use `LegacyLayout`: `"mire"` inside the swamp blobs, `"forest"` everywhere else.

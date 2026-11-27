@@ -35,6 +35,7 @@ PX, PY, PZ, VX, VY, VZ, LIFE, MAXL, SIZE, GROW, CR, CG, CB, CA, GRAV, DRAG, ADD,
 # ----------------------------------------------------------------- colour grading
 WHITE = (1.0, 1.0, 1.0)
 NIGHT = (0.15, 0.18, 0.36)
+GLOOM = (0.2, 0.17, 0.3)                # a woken boss's unnatural dusk (lairs.py), mixed in by game.boss_gloom
 CAVE_AMBIENT = (0.12, 0.11, 0.16)       # underground layers can set their own (biomes.LayerInfo.light)
 FP_UNDERGROUND_LIFT = 1.7               # first person underground: the walls loom right in front of you,
 FP_UNDERGROUND_ADD = 0.035              # so lift the ambient a little (it was nearly black)
@@ -481,7 +482,11 @@ class FX3D:
     def fx_ambient(self, vl):
         """Ambient light colour: the time of day on the surface, the layer's own light underground."""
         if vl == "over":
-            return grade(self.phase)
+            amb = grade(self.phase)
+            k = getattr(self, "boss_gloom", 0.0)       # lairs.py: a boss out by day drags the night in with it
+            if k > 0:
+                amb = tuple(min(a, a + (g - a) * k) for a, g in zip(amb, GLOOM))
+            return amb
         import biomes
         info = biomes.LAYER_INFO.get(vl)
         amb = (info.light if info is not None else None) or CAVE_AMBIENT

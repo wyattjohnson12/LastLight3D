@@ -6,7 +6,7 @@ What's here:
     trees, Marsh Reeds and glowing Glowcap mushrooms (they light up at night) to gather.
   * Drowned: a swamp zombie that rises at night in the Mire. Drops reeds and glowcaps.
   * New gear: Mire Mask (head - filters spore gas), Swamp Tonic, Reed Arrows, Thornroot Whip.
-  * THE MIRE LURKER joins the boss rotation (before the Inferno Colossus):
+  * THE MIRE LURKER sleeps in a lair in the middle of the Mire (lairs.py) until someone wakes it:
       SPORE BURST     - lobs spore pods that burst into poison gas clouds
       GRASPING ROOTS  - roots burst up under survivors and hold them in place
       SUBMERGE        - sinks into the mud and erupts under someone

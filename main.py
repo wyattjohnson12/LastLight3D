@@ -3,7 +3,7 @@ LAST LIGHT - a top-down survival game (version 2 of PythonGame2025).
 
 Gather by day, build and fight by night - alone or with up to 3 friends on the same Wi-Fi.
 Craft at a workbench, smelt iron, tame animals, store loot in team storage, explore the caves,
-and survive a boss every third night.
+find the bosses' lairs and wake them when you dare (lairs.py).
 
 Run:                      python3 main.py
 Host a co-op game:        python3 main.py --host
@@ -24,6 +24,7 @@ import arcade
 import swamp  # noqa: F401  (first: adds the Mire's items, recipes and boss before ui.py reads them)
 import biomes  # noqa: E402  (biome registry; then every biome / terrain / layer plug-in registers itself)
 biomes.load_plugins()
+import lairs  # noqa: E402  (the bosses' lairs: registers itself like the biome plug-ins, after them)
 import base  # noqa: F401  (also early: adds the Base Flag recipe before ui.py reads the tabs)
 import art
 import art_bees
@@ -249,9 +250,9 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         self.hazards = []
         self.shots = []            # arrows and fire pots in the air
         self.rings = []
-        self.boss_num = 0          # how many bosses have been killed (picks the next one from BOSS_ORDER)
-        self.boss_day = BOSS_EVERY # the night the next boss rises
-        self.boss_hp = None        # a boss that got away keeps its wounds and comes back the next night
+        self.boss_num = 0          # how many bosses have been killed (each lair counts its own: lairs.py)
+        self.boss_day = BOSS_WAKE_NIGHTS   # the night a boss wakes by itself if nobody wakes one (lairs.py)
+        self.boss_hp = None        # the wounds of the boss that's out / ran home (each lair keeps its own)
         self.storage = {}
         self.nodes_ver = self.struct_ver = self.storage_ver = 0
         self.sent_nodes_ver = self.sent_struct_ver = self.sent_storage_ver = -1
@@ -479,6 +480,10 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
 
     @property
     def darkness(self):
+        return max(self.sky_darkness, getattr(self, "boss_gloom", 0.0))   # lairs.py: a boss out by day darkens it
+
+    @property
+    def sky_darkness(self):
         p = self.phase
         if p < DUSK_START:
             return 0.0
@@ -497,7 +502,8 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         return self.day >= self.boss_day
 
     def next_boss(self):
-        return BOSSES[BOSS_ORDER[self.boss_num % len(BOSS_ORDER)]]
+        """The boss that wakes by itself next (lairs.py: the first unbeaten one)."""
+        return BOSSES[lairs.next_kind(self)]
 
     @property
     def view_layer(self):
@@ -761,12 +767,14 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         self.play("travel", 0.3, to=p)
 
     def interact(self, p):
-        """E / B: pick up your backpack, use a cave entrance or drink - whichever is at hand (storage opens on
-        your own screen)."""
+        """E / B: pick up your backpack, use a cave entrance, a boss's altar, search a place or drink - whichever
+        is at hand (storage opens on your own screen)."""
         if self.pickup_pack(p, backpack.REACH):     # backpack.py
             return
         if self.near_exit(p):
             self.travel(p)
+        elif lairs.near_altar(self, p):       # lairs.py: wake a boss
+            lairs.use_altar(self, p, lairs.near_altar(self, p))
         elif explore.open_near(self, p):      # explore.py: search an abandoned place's chest
             pass
         elif self.near_pond(p):
@@ -1138,6 +1146,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         z.hp -= dmg
         if isinstance(z, Boss) and z.state == "flee" and z.hp > 0:
             self.boss_hp = z.hp            # running off at dawn: it still takes the wound home with it
+            lairs.remember(self, z)
         z.flash = 0.12
         L = self.L(z)
         if isinstance(z, Zombie):
@@ -1277,14 +1286,15 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         self.burst(p.sprite.center_x, p.sprite.center_y, (200, 40, 40), 6, 120, layer=p.layer)
 
     # ------------------------------------------------------------------ bosses
-    def spawn_boss(self):
-        n = self.boss_num
-        kind = BOSS_ORDER[n % len(BOSS_ORDER)]
-        cycle = n // len(BOSS_ORDER)
+    def spawn_boss(self, kind=None, at=None):
+        """A boss rises: `kind` at `at` (woken at its lair, lairs.py), or with no kind the next unbeaten one
+        near the survivors (it woke by itself and came for them). Its lair says how tough and how hurt it is."""
+        kind = kind or lairs.next_kind(self)
+        cycle = lairs.cycle(self, kind)
         alive = self.alive_players("over")
         anchor = random.choice(alive).pos if alive else self.base_spot()
-        b = None
-        for i in range(30):
+        b = Boss(kind, at[0], at[1], self.next_bid, cycle) if at else None
+        for i in range(0 if at else 30):
             a = random.uniform(0, math.tau)
             x, y = anchor[0] + math.cos(a) * 560, anchor[1] + math.sin(a) * 560
             if not (150 < x < self.world_size - 150 and 150 < y < self.world_size - 150):
@@ -1298,7 +1308,8 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         self.next_bid += 1
         self.over.bosses.append(b)
         self.bmap[b.bid] = b
-        if self.boss_hp is not None:      # it got away last night - same boss, same wounds, no intro
+        self.boss_hp = lairs.wounds(self, kind)
+        if self.boss_hp is not None:      # it got away before - same boss, same wounds, no intro
             b.hp = min(b.max_hp, self.boss_hp)
             self.play("roar", 0.4)
             self.shake(8, 0.6)
@@ -1309,13 +1320,17 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         return b
 
     def start_retreat(self, b):
-        """Dawn: the boss turns and runs, fading into the trees, while a short cutscene says it'll be back."""
+        """Dawn: the boss turns and runs home to its lair, fading away, while a short cutscene says it got away."""
         alive = self.alive_players("over")
-        if alive:
+        lair = lairs.home(self, b.kind)
+        if lair and dist(lair, b.position) > 150:      # back home to its lair (lairs.py)
+            a = math.atan2(lair[1] - b.center_y, lair[0] - b.center_x)
+        elif alive:
             p = min(alive, key=lambda q: dist(q.pos, b.position))
             a = math.atan2(b.center_y - p.pos[1], b.center_x - p.pos[0])
         else:
             a = random.uniform(0, math.tau)
+        lairs.remember(self, b)            # its lair keeps the wounds for next time
         b.state, b.state_t, b.snared = "flee", 0.0, 0.0
         b.charge_dir = (math.cos(a), math.sin(a))
         self.play("roar", 0.35, at=b.position, layer="over")
@@ -1380,11 +1395,10 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         if b.state == "flee" and self.cut and self.cut.get("mode") == "retreat":
             self.end_cutscene()            # shot down as it ran: no "it will be back" scene
         self.boss_num += 1
-        self.boss_day = self.day + self.boss_gap
+        self.boss_day = self.day + self.boss_gap     # the backstop clock starts again (lairs.py)
         self.boss_hp = None
-        gap = f"{self.boss_gap} night{'s' if self.boss_gap > 1 else ''}"
-        self.say(f"{b.info['name']} IS DEFEATED!  Everyone alive gets: {drops}.   "
-                 f"Next: {self.next_boss()['name']} in {gap}.", 9)
+        left = lairs.on_kill(self, b)      # its lair goes quiet
+        self.say(f"{b.info['name']} IS DEFEATED!  Everyone alive gets: {drops}.   {left}", 9)
         self.bmap.pop(b.bid, None)
         b.remove_from_sprite_lists()
         self.hazards = [h for h in self.hazards if h.owner is not b]
@@ -1573,23 +1587,24 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         self.fast_forward = everyone_down and self.is_night
         self.clock += dt * self.clock_rate() * (8 if self.fast_forward else 1)
         p = self.phase
+        backstop = self.boss_night and not self.over.bosses     # lairs.py: nobody woke one for too long
         if before < DUSK_START <= p:
-            if self.boss_night and self.boss_hp is not None:
-                self.say(f"{self.next_boss()['name']} is coming back tonight. Finish it!", 6)
-            elif self.boss_night:
-                self.say("The ground trembles... something BIG is coming tonight. Get ready!", 6)
+            if backstop:
+                self.say(f"The ground trembles... {self.next_boss()['name']} has woken by itself - "
+                         "and it's coming for you tonight. Get ready!", 7)
             else:
                 self.say("Dusk... they're coming. Build walls, light a fire, or get to a hut.", 5)
-        if before < NIGHT_START <= p and self.boss_night and not self.over.bosses:
+        if before < NIGHT_START <= p and backstop:
             self.spawn_boss()
+            self.boss_day = self.day + self.boss_gap
         if before < DAWN_START <= p:
             self.say("Dawn breaks - the dead burn in the sunlight.", 4)
             for b in list(self.over.bosses):
                 if b.state == "flee":
                     continue
-                self.boss_hp = b.hp            # it remembers every hit
-                self.boss_day = self.day + 1   # ...and comes back tomorrow night
-                self.say(f"{b.info['name']} retreats ({int(b.hp)}/{int(b.max_hp)})... it will be back tomorrow night.", 7)
+                self.boss_hp = b.hp            # it remembers every hit (so does its lair: start_retreat)
+                self.say(f"{b.info['name']} retreats ({int(b.hp)}/{int(b.max_hp)}) to its lair... "
+                         "wake it again when you're ready.", 7)
                 self.start_retreat(b)
             self.hazards = []
             self.cold_mult = 1.0
@@ -1599,9 +1614,10 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         if p < before:
             self.day += 1
             tonight = ""
-            if self.boss_night:
-                tonight = (f"  Tonight {self.next_boss()['name']} returns." if self.boss_hp is not None
-                           else "  Tonight a BOSS rises.")
+            if self.boss_night and not self.over.bosses:
+                tonight = f"  The lairs are restless: tonight {self.next_boss()['name']} wakes by itself."
+            elif self.boss_day == self.day + 1:
+                tonight = "  The ground rumbles... a boss will wake by itself TOMORROW night."
             self.say(f"Day {self.day}. You survived the night." + tonight, 5)
             self.on_new_day()    # progress.py: +1 night survived for everyone
             self.save_game()     # autosave every morning
@@ -2610,6 +2626,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             "t": "snap", "c": r1(self.clock), "d": self.day, "k": self.kills, "g": self.state,
             "ff": int(self.fast_forward), "cm": self.cold_mult, "dn": list(self.difficulty), "wx": self.weather_net(),
             "bd": [self.boss_day, self.boss_num, int(self.boss_hp is not None)],
+            "lr": lairs.net_rows(self),     # lairs.py: each lair's state
             "sh": [[s.kind, r1(s.x), r1(s.y), r1(s.vx), r1(s.vy), round(s.t, 2), round(s.T, 2), li(s.layer)]
                    for s in self.shots],
             "p": [[p.id, p.name, r1(p.sprite.center_x), r1(p.sprite.center_y), round(p.face, 2), int(p.health),
@@ -2714,6 +2731,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         if "bd" in m:
             self.boss_day, self.boss_num = m["bd"][0], m["bd"][1]
             self.boss_hp = 1 if m["bd"][2] else None
+        lairs.net_apply(self, m.get("lr"))
         self.shots = []
         for kind, x, y, vx, vy, t, T, ly in m.get("sh", []):
             s = Shot(kind, x, y, vx, vy, T, layer=LAYERS[ly])
@@ -2940,7 +2958,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             self.intro = None
             self.state = "playing"
             self.say(f"Welcome back - Day {self.day}.  ({self.difficulty[0]}: {self.difficulty[1]}s day, "
-                     f"{self.difficulty[2]}s night, a boss every {self.boss_gap} nights)", 5)
+                     f"{self.difficulty[2]}s night, bosses wake on their own after {self.boss_gap} nights)", 5)
             if self.net == "host":
                 self.say(f"Hosting your saved game! Friends: Join -> pick '{self.my_name}'. "
                          "Use the same name as last time to get your stuff back.", 8)
@@ -3328,7 +3346,8 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         if "b" in pr:
             pk = self.pack_of(me)       # backpack.py: B next to your pack picks it up
             at_pack = pk is not None and pk.layer == me.layer and dist(pk.pos, me.pos) < backpack.REACH
-            if at_pack or self.near_storage(me) or self.near_exit(me) or self.near_pond(me):
+            if (at_pack or self.near_storage(me) or self.near_exit(me) or self.near_pond(me)
+                    or lairs.near_altar(self, me)):
                 self.interact_key()
             else:
                 self.action("quick")
