@@ -45,8 +45,8 @@ PINE_TREE = 20               # tree variants 20, 21, 22 are pines (see art_tundr
 
 # --- the cold (warmth per second, before clothes; see main._update_survivor)
 TUNDRA_COLD = 4.6            # by day: more than the sun gives back, so bare skin slowly freezes
-TUNDRA_NIGHT_COLD = 1.8      # extra at full night
-SEASON_COLD = {"spring": 0.0, "summer": -1.6, "autumn": 0.4, "winter": 1.2}
+TUNDRA_NIGHT_COLD = -2.4     # at full night (the night itself is already cold everywhere: keep it survivable)
+SEASON_COLD = {"spring": 0.0, "summer": -1.6, "autumn": 0.4, "winter": 0.8}
 WARMER_SOAK = 1.4            # a Whitewood Warmer in your backpack cancels this much tundra cold
 SNOWLINE_COLD = 2.2          # past the winter snow line, outside the tundra (scaled by how deep in you are)
 SNOW_SPEED = 0.92            # wading through snow
@@ -182,7 +182,7 @@ def _state(game):
     st = getattr(game, "tundra", None)
     if st is None or st.get("layout") is not game.layout:
         st = game.tundra = {"layout": game.layout, "season": None, "told": False, "line": [], "thaw": [],
-                            "ponds": [], "tall": [], "snow_t": 0.0, "regen_told": False}
+                            "ponds": [], "tall": [], "glows": [], "snow_t": 0.0, "regen_told": False}
     return st
 
 
@@ -286,6 +286,32 @@ def gen_surface(gen):
             sp.visible = False
             over.ground.append(sp)
             st["line" if d > 0 else "thaw"].append((sp, abs(d)))
+
+    # frost crystals light up the snow around them (the pool of light follows a crystal that regrows elsewhere)
+    st["glows"] = []
+    for n in over.rocks:
+        if n.kind == "frost_crystal":
+            gl = arcade.Sprite(art.glow(60, (140, 220, 255)), center_x=n.center_x, center_y=n.center_y)
+            over.glows.append(gl)
+            st["glows"].append((n, gl))
+
+    # soften the border between snow tiles and grass tiles: snow patches straddling every such tile edge
+    T = 256
+    snowy = lambda gx, gy: lay.biome_at(gx, gy) == NAME      # the same rule world._build_v2 uses per tile
+    for gx in range(0, size + T, T):
+        for gy in range(0, size + T, T):
+            if not snowy(gx, gy):
+                continue
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                if snowy(gx + dx * T, gy + dy * T):
+                    continue
+                for t in (-0.5, 0.0, 0.5):
+                    x = gx + dx * T * 0.5 + (dy and t * T) + r.uniform(-30, 30) + dx * 40
+                    y = gy + dy * T * 0.5 + (dx and t * T) + r.uniform(-30, 30) + dy * 40
+                    sp = arcade.Sprite(art_tundra.snow_patch(r.randint(0, 2)), center_x=x, center_y=y)
+                    sp.scale = 0.62
+                    sp.angle = r.uniform(0, 360)
+                    over.ground.append(sp)
 
     # tundra ponds freeze in winter (texture + whether they block are set by season in visuals())
     for i, s in enumerate(over.ponds):
@@ -435,6 +461,10 @@ def visuals(game, dt):
         return
     if st["season"] != game.season:
         _apply_season(game, st, game.season)
+    for n, gl in st.get("glows", ()):
+        gl.visible = n.state == "full"
+        if gl.visible and gl.position != n.base:
+            gl.position = n.base
     if game.view_layer != "over":
         return
     vx, vy = game.view_pos()
@@ -462,9 +492,8 @@ def ambient(game, dt, x, y):
     me = game.me
     if me and me.alive and me.layer == "over" and not st["told"] and game.biome_at(me.pos) == NAME:
         st["told"] = True
-        game.message, game.message_t = ("FROSTWOOD TUNDRA: the cold drains your warmth FAST, even by day. Wear a Fur "
-                                        "or Pelt Cloak, keep a fire close. Chop pines & Whitewood, mine ice and "
-                                        "Frost Crystals. Ponds only freeze in winter.", 8)
+        game.message, game.message_t = ("FROSTWOOD TUNDRA: the cold drains warmth FAST, even by day - "
+                                        "wear a cloak, keep a fire close.", 7)
     rate = 34 if game.season == "winter" else 24 if game.season != "summer" else 14
     st["snow_t"] -= dt * rate
     while st["snow_t"] < 0:

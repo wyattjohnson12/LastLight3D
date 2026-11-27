@@ -263,26 +263,30 @@ def pine(i):
 
 
 def _whitewood_img(seed):
-    """Top-down whitewood: a round crown of pale silver-blue leaves (opaque) with frost glints."""
+    """Top-down whitewood: a round crown of silver-green leaves (opaque) with a light dusting of frost."""
     rnd = random.Random(seed)
     w = 140
     c = w / 2
     img = _canvas(w, w)
     R = c * 0.93
-    _circle(img, c, c, R, (150, 176, 196, 255))
-    for _ in range(9):
+    _circle(img, c, c, R, (112, 138, 128, 255))
+    for _ in range(11):
         a = rnd.uniform(0, math.tau)
         d = rnd.uniform(0, R * 0.55)
-        r = rnd.uniform(R * 0.32, R * 0.45)
+        r = rnd.uniform(R * 0.3, R * 0.42)
         x, y = c + math.cos(a) * d, c + math.sin(a) * d
-        _ball(img, (x - r, y - r, x + r, y + r), rnd.choice([(176, 202, 220), (192, 214, 230), (160, 190, 212)]) + (255,),
+        _ball(img, (x - r, y - r, x + r, y + r), rnd.choice([(150, 176, 160), (166, 190, 174), (134, 162, 150)]) + (255,),
               outline=False, soft=1.5)
-    for _ in range(40):
+    for _ in range(90):         # small leaves
         a = rnd.uniform(0, math.tau)
-        d = rnd.uniform(0, R * 0.9)
-        _circle(img, c + math.cos(a) * d, c + math.sin(a) * d, rnd.uniform(1.2, 2.6), (240, 248, 255, 220))
-    _ball(img, (c - R * 0.3, c - R * 0.3, c + R * 0.3, c + R * 0.3), (236, 244, 252, 255), outline=False, soft=1.6)
-    ImageDraw.Draw(img).ellipse([(c - R) * S, (c - R) * S, (c + R) * S, (c + R) * S], outline=(120, 146, 170, 255),
+        d = rnd.uniform(0, R * 0.92)
+        x, y = c + math.cos(a) * d, c + math.sin(a) * d
+        _circle(img, x, y, rnd.uniform(1.6, 3.0), rnd.choice([(196, 214, 200), (120, 150, 136), (210, 226, 216)]) + (230,))
+    for _ in range(14):         # frost glints
+        a = rnd.uniform(0, math.tau)
+        d = rnd.uniform(0, R * 0.8)
+        _circle(img, c + math.cos(a) * d, c + math.sin(a) * d, 1.2, (245, 250, 255, 230))
+    ImageDraw.Draw(img).ellipse([(c - R) * S, (c - R) * S, (c + R) * S, (c + R) * S], outline=(90, 112, 104, 255),
                                 width=int(1.2 * S))
     return _finish(img, w, w)
 

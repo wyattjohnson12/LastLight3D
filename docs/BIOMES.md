@@ -49,6 +49,9 @@ biomes.register(biomes.Biome(NAME, title="Frostwood Tundra", order=20, tint=(214
                              gen_surface=gen_surface, player_tick=lambda game, p, dt: 0.6))
 ```
 
+Biome-only animals: give the `settings.ANIMALS` entry `"home": "<biome>"` and it only spawns where a biome's
+`animals` dict lists it (otherwise unlisted kinds get weight 2 everywhere).
+
 Items, recipes, node kinds, zombies and bosses go into `settings.py`'s tables **from your module**
 (`ITEMS.update`, `NODES.update`, `CRAFT_TABS[...].append(R(...))`, then
 `RECIPES[:] = [r for tab in CRAFT_TABS.values() for r in tab]`). `swamp.py` is the worked example. Plug-ins
@@ -78,6 +81,7 @@ aren't 30.
 | `speed` | `(game, p) -> multiplier` while p stands in this biome | the computer moving p | `main.move_player` |
 | `fog` | `(r, g, b, a)` screen haze while the viewer is here (blended) | every computer | `weather.draw_weather_3d` |
 | `ambient` | `(game, dt, x, y)` particles / sounds where the viewer is | every computer | `main.on_update` |
+| `visuals` | `(game, dt)` every frame wherever the viewer is (seasonal looks, effects past your border) | every computer | `biomes.biome_ambient` |
 | `height` | `(game, x, y) -> px` (summed over modules) | every computer | `game.ground_height` |
 | `blocked` | `(game, x, y, layer) -> bool` nobody walks here | every computer | `main.move_player`, `base.spot_ok`, `gen.free` |
 | `water` | `(game, x, y, layer) -> bool` | every computer | `base.spot_ok`, `gen.free` (wire drinking in yourself) |

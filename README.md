@@ -122,6 +122,27 @@ spore pods that burst into poison gas (purple circles), roots that burst up unde
 (brown circles), and it sinks into the mud and erupts under someone (bubbling patch). It **heals while it's
 in the swamp**, so lure it out onto dry ground. The code lives in `swamp.py` (and the art in `art_swamp.py`).
 
+## The Frostwood Tundra (snow biome)
+
+One of the regions around the forest is the **Frostwood Tundra**: deep snow, snowdrifts and forests of
+snow-laden pines. It is **cold** - it drains your warmth even by day. Wear a **Fur Cloak** (or better), keep
+a campfire or brazier close, and carry a **Whitewood Warmer**. A hint pops up the first time you walk in.
+- **Pines** give wood; **Whitewood** trees (pale, silver leaves) give Whitewood. **Clear Ice** blocks and
+  glowing **Frost Crystals** need a pickaxe - the crystals give **Frost Shards**, so you can make the Frost
+  Cloak and Frost Spear before beating the Wraith.
+- Wildlife: **snow foxes**, **snow hares** (both drop **Snow Pelts**) and **arctic wolves** (fur, tough
+  guards as pets). Foxes tame with meat, hares with berries, arctic wolves with meat.
+- New crafts: **Snowfox Hood** (head, warmth 4), **Pelt Cloak** (warmth 10), **Whitewood Warmer**
+  (campfire; keep one in your backpack and the tundra's cold bites much less), melt **Clear Ice** into
+  water at a campfire, and campfires can be built from Whitewood.
+- Ponds there freeze in **winter** - walk (and slide) across them. The rest of the year they're icy water
+  nobody can cross.
+- The snow line follows the seasons: in **winter** the snow and its chill spread far out into the regions
+  around the tundra; in **summer** its edges thaw.
+- In the middle lies the **Wraith's Hollow**. The **Frost Wraith** heals while it stands in the tundra's
+  snow, so fight it somewhere else. Code: `tundra.py` (art `art_tundra.py`, creature models
+  `tools/blender/models/tundra.py`).
+
 ## Pets
 
 Tame an animal by holding its favourite food and right-clicking it (wolf: meat, boar & rabbit: berries,
