@@ -9,6 +9,7 @@ import arcade
 import art
 import art_extra  # noqa: F401  (registers the new icons)
 import biomes
+import lairs
 import savegame
 from settings import *
 
@@ -253,15 +254,9 @@ class UI:
                                           H - 82, H - 78, (30, 36, 70))
         arcade.draw_lrbt_rectangle_filled(W - 221 + bar_w * p, W - 219 + bar_w * p, H - 85, H - 75, (255, 230, 150))
         y = H - 106
-        if self.boss_night:
-            label = "BOSS RETURNS TONIGHT" if self.boss_hp is not None else "BOSS NIGHT"
-            self.txt("bossnight", label, W - 18, y, (255, 110, 90), 11, anchor_x="right", bold=True)
-            y -= 16
-        else:
-            n = self.boss_day - self.day
-            self.txt("bossnext", f"Next boss in {n} night{'s' if n > 1 else ''}", W - 18, y, (200, 170, 160), 10,
-                     anchor_x="right")
-            y -= 16
+        label, col, loud = lairs.hud_line(self)      # lairs.py: "Bosses asleep: 5 - one stirs in 9 nights"
+        self.txt("bossnext", label, W - 18, y, col, 11 if loud else 10, anchor_x="right", bold=loud)
+        y -= 16
         y = self.draw_weather_hud(y)     # weather.py: season + weather
         if self.view_layer != "over":
             self.txt("cavetag", "UNDERGROUND", W - 18, y, (190, 170, 255), 11, anchor_x="right", bold=True)
@@ -359,6 +354,9 @@ class UI:
             to = far[0] if far else "over"
             down = biomes.depth(to) > biomes.depth(me.layer)
             return f"{inter}  climb {'down ' if down else 'back up '}{self.layer_title(to)}"
+        lair = lairs.hint(self, me, inter)      # lairs.py: next to a boss's altar
+        if lair:
+            return lair
         if self.near_pond(me):
             return f"{inter}  drink & fill flask"
         t = self.tame_target()
@@ -792,7 +790,8 @@ class UI:
         if fade <= 0:
             return
         a = int(255 * fade)
-        self.txt("cut_n", f"NIGHT {c['night']}", W / 2, H - 60, (200, 180, 160, a), 14, anchor_x="center", bold=True)
+        when = "NIGHT" if DUSK_START <= self.phase < DAWN_START else "DAY"     # (bosses woken by day, lairs.py)
+        self.txt("cut_n", f"{when} {c['night']}", W / 2, H - 60, (200, 180, 160, a), 14, anchor_x="center", bold=True)
         name = info["name"]
         shown = name[:max(0, min(len(name), int((t - 1.6) * 16)))]
         jitter = math.sin(t * 40) * 2 if t < 3.0 else 0
@@ -837,8 +836,8 @@ class UI:
                      anchor_x="center", bold=True)
             if t > 1.4:
                 la = int(255 * fade * ease((t - 1.4) / 0.5))
-                self.txt("ret_l", "...but it will be back tomorrow night.", W / 2, H / 2 + 98, (240, 230, 220, la), 19,
-                         anchor_x="center")
+                self.txt("ret_l", "...back to its lair. Wake it again when you're ready.", W / 2, H / 2 + 98,
+                         (240, 230, 220, la), 19, anchor_x="center")
             if t > 2.2 and c.get("hp"):
                 la = int(255 * fade * ease((t - 2.2) / 0.5))
                 self.txt("ret_h", c["hp"], W / 2, 46,
@@ -851,7 +850,7 @@ class UI:
         if self.menu == "main":
             name, day, night, gap = self.chosen_difficulty()
             return ["Play solo", "Host co-op game", "Join co-op game", "Local co-op (split screen)",
-                    "Load saved game", f"Difficulty:  {name}  ({day}s / {night}s,  boss every {gap} nights)",
+                    "Load saved game", f"Difficulty:  {name}  ({day}s / {night}s,  bosses wake after {gap} nights)",
                     "Screen & graphics...", "Quit"]
         if self.menu == "gfx":
             onoff = lambda v: "On" if v else "Off"
@@ -871,7 +870,7 @@ class UI:
             mark = "\u2022 " if cur == "Custom" else ""
             gap = self.chosen_difficulty()[3]
             return rows + [f"<      {mark}Custom day:  {day}s      >", f"<      {mark}Custom night:  {night}s      >",
-                           f"<      Nights between bosses:  {gap}      >", "Back"]
+                           f"<      Bosses wake on their own after:  {gap} nights      >", "Back"]
         if self.menu == "load":
             page = self.save_list[self.save_page * 5:(self.save_page + 1) * 5]
             rows = [savegame.save_label(meta) for _, meta in page]
@@ -886,8 +885,8 @@ class UI:
             if tuple(saved) != tuple(now):
                 use = self.use_title_difficulty
                 d = now if use else saved
-                gap = d[3] if len(d) > 3 else BOSS_EVERY
-                rows.append(f"Difficulty:  {d[0]} {d[1]}s / {d[2]}s, boss every {gap}   "
+                gap = d[3] if len(d) > 3 else BOSS_WAKE_NIGHTS
+                rows.append(f"Difficulty:  {d[0]} {d[1]}s / {d[2]}s, bosses wake after {gap}   "
                             f"({'title-screen setting' if use else 'as saved'})")
             rows.append("Delete this save")
             return rows + ["Back"]
@@ -1074,7 +1073,7 @@ class UI:
         if self.menu == "local":
             self.draw_lobby()
             return
-        heads = {"diff": "DIFFICULTY  -  day & night length, and how often bosses come",
+        heads = {"diff": "DIFFICULTY  -  day & night length, and how long the bosses sleep",
                  "load": "LOAD A SAVED GAME", "save": "RESUME THIS GAME AS...",
                  "confirm": "DELETE THIS SAVE?", "gfx": "SCREEN & GRAPHICS"}
         if self.menu == "confirm":
@@ -1106,7 +1105,10 @@ class UI:
             lo_n, hi_n = CUSTOM_NIGHT_LIMITS
             lo_g, hi_g = BOSS_GAP_LIMITS
             self.txt("t6", f"LEFT / RIGHT or click the arrows (SHIFT = 30s).   Day {lo_d}-{hi_d}s,  night {lo_n}-{hi_n}s,  "
-                     f"bosses every {lo_g}-{hi_g} nights.   Saved with each game.", W / 2, 46, (160, 160, 160), 11,
+                     f"bosses wake by themselves after {lo_g}-{hi_g} nights.   Saved with each game.", W / 2, 46,
+                     (160, 160, 160), 11, anchor_x="center")
+            self.txt("t7", "Bosses sleep in their lairs until you wake them at the altar.  If nobody wakes or beats one "
+                     "for that long, the next one wakes by itself and comes for you.", W / 2, 28, (160, 160, 160), 11,
                      anchor_x="center")
         elif self.menu == "load":
             delete = "X" if self.use_pad else "DELETE"
@@ -1123,7 +1125,7 @@ class UI:
         elif self.menu == "confirm":
             self.txt("t6", "ESC / B = keep it", W / 2, 46, (160, 160, 160), 11, anchor_x="center")
         else:
-            self.txt("t6", "Tame animals  -  craft armor  -  explore the caves  -  a boss rises every 3rd night",
+            self.txt("t6", "Tame animals  -  craft armor  -  explore the caves  -  find the bosses' lairs and wake them",
                      W / 2, 46, (160, 160, 160), 11, anchor_x="center")
 
     def draw_help(self, overlay):
@@ -1142,7 +1144,7 @@ class UI:
             ("Right-click  |  LT", "build / eat / tame (hold the animal's food)"),
             ("1-8, wheel  |  LB / RB", "choose hotbar item"),
             ("TAB  |  Y", "backpack, crafting & armor"),
-            ("E  |  B", "open storage, use cave entrance, drink"),
+            ("E  |  B", "open storage, use cave entrance, drink, wake a boss at its lair"),
             ("Q  |  B", "quick eat / drink"), ("P  |  D-pad up", "Pets menu: names, orders, pet armor"),
             ("F  |  D-pad down", "quick order for all pets: follow / work / stay"),
             ("SHIFT  |  hold X", "rest (heals in a hut or by a fire)"),

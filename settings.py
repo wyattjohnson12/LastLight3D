@@ -45,8 +45,9 @@ FIRE_WARM_RADIUS = 170
 DAY_CYCLE_SECONDS = 180    # one full day + night
 START_PHASE = 0.05         # start just after dawn
 DUSK_START, NIGHT_START, DAWN_START = 0.55, 0.65, 0.90
-BOSS_EVERY = 3             # the first boss rises on night 3; each next one 3 nights after the last is killed.
-                           # A boss that survives the night comes back every night until it's beaten.
+BOSS_EVERY = 3             # the OLD rhythm (a boss every 3rd night), only used to read saves made with it
+BOSS_WAKE_NIGHTS = 10      # bosses sleep in their lairs (lairs.py) until someone wakes them at the altar. If
+                           # nobody wakes or beats one for this many nights, the next one wakes by itself.
 # Difficulty = how long the day and the night last, in real seconds. "Night" runs from dusk to dawn
 # (when the zombies are out); "day" is the rest. Pick one on the title screen, or set your own.
 DIFFICULTIES = [
@@ -59,7 +60,7 @@ DIFFICULTIES = [
 DEFAULT_DIFFICULTY = "Default"
 CUSTOM_DAY_LIMITS = (30, 900)      # shortest / longest custom day, in seconds
 CUSTOM_NIGHT_LIMITS = (20, 600)    # shortest / longest custom night
-BOSS_GAP_LIMITS = (1, 10)          # "nights between bosses" setting (the default is BOSS_EVERY)
+BOSS_GAP_LIMITS = (2, 30)          # "bosses wake on their own after N nights" setting (default BOSS_WAKE_NIGHTS)
 
 # ----------------------------------------------------------------- seasons & weather (see weather.py)
 SEASONS = ["spring", "summer", "autumn", "winter"]

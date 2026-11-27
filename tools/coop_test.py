@@ -254,7 +254,7 @@ result = [before, b.hp, g.boss_hp, b.state]
 import os
 for b in list(g.over.bosses): g.bmap.pop(b.bid, None); b.remove_from_sprite_lists()
 g.boss_hp = None
-b = g.spawn_boss()          # intro cutscene starts
+b = g.spawn_boss("brood")   # a fresh boss (the titan went home to its lair wounded): its intro starts
 t0 = os.path.getmtime(g.save_path); import time; time.sleep(0.05)
 cut = bool(g.cut)
 can_before = g.can_save()

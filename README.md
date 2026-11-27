@@ -3,7 +3,7 @@
 The 3D version of Last Light - same game, now seen through a tilted 3D camera with real walls,
 standing trees and perspective. A survival game: gather by day, build by dusk, survive the night.
 Craft at a workbench, smelt iron, wear armor, tame pets, share a team storage bin,
-explore the caves, and survive a boss every third night. Play solo, online co-op over
+explore the caves, and find the bosses' lairs - then wake them when you're ready. Play solo, online co-op over
 Wi-Fi, or split-screen on one computer. Keyboard + mouse or an Xbox controller.
 
 ## First time setup
@@ -75,21 +75,48 @@ in the order they rejoin). Saves live in the `saves/` folder.
 To delete a save: in **Load saved game**, highlight it and press **DELETE** (or **X** on a
 controller), or pick it and choose **Delete this save**. You'll be asked to confirm first.
 
-## Difficulty (day & night length, boss timing)
+## Difficulty (day & night length, how long the bosses sleep)
 
 On the title screen, **Difficulty** sets how many real seconds the day and the night last:
 Relaxed (240s / 45s), Default (117s / 63s), Hard (90s / 90s), Nightmare (60s / 150s), or your own custom
-times (day 30-900s, night 20-600s), plus **nights between bosses** (1-10, default 3). Every saved game
-keeps its own settings, but you can switch a save to the title-screen settings when you resume it.
+times (day 30-900s, night 20-600s), plus **bosses wake on their own after N nights** (2-30, default 10 -
+see below). Every saved game keeps its own settings, but you can switch a save to the title-screen settings
+when you resume it.
 
-## Bosses
+## Bosses and their lairs
 
-The first boss rises on night 3 (or whatever "nights between bosses" is set to). If you don't kill it,
-it retreats at dawn - keeping every wound you gave it - and comes back the next night, and every night
-after, until it's beaten. Kill it, and the next boss comes 3 nights later.
+Every boss sleeps in a **lair** out in the world, and **you choose when to wake it**. Take your time:
+explore, gather, build up your gear - and go and wake a boss when you're ready (or when you dare).
 
-Every boss drops a material for its own gear, and each boss's gear beats the one before it
-(order: Quake Titan -> Brood Mother -> Frost Wraith -> Mire Lurker -> Inferno Colossus):
+| Boss | Lair |
+|---|---|
+| Quake Titan | the Stone Highlands, inside the Titan's Crown (the ring of rune stones) |
+| Brood Mother | the Riverlands meadow, at the end of its road |
+| Frost Wraith | the Frostwood Tundra, in the Wraith's Hollow - an ice spire ringed by frost crystals |
+| Mire Lurker | deep in the Mire |
+| Inferno Colossus | the Ashlands, on the rim of its lava caldera (it climbs out of the lava) |
+
+(On maps from before the biomes, the Mire Lurker sleeps in the Mire and the others far out from the spawn.)
+Roads lead from the spawn towards most of them. A lair is easy to spot: a scorched patch with a ring of
+glowing runes and old bones, an altar stone, and a tall spire in the boss's colours with embers rising
+off it (they glow at night). The first time you come near one, you're told whose lair it is.
+
+- **Waking a boss:** stand at the altar and press **E** (controller **B**). The first press warns you; press
+  again within a few seconds to wake it. The boss rises right there, at its lair.
+- **At night** it fights until dawn. **By day** it drags the night in with it: the sky darkens while it's out
+  (it's cold, and the dead don't burn), and it fights until the *next* dawn - a long fight.
+- **At dawn** a surviving boss runs back to its lair and sleeps there, **keeping every wound you gave it**.
+  Wake it again whenever you're ready.
+- Only one boss can be awake at a time. Fight them in **any order**.
+- A beaten lair goes **quiet** (grey runes, no embers) and stays that way. Once every lair is quiet, they
+  all wake up again - stronger.
+- **The backstop:** if nobody wakes or beats a boss for 10 nights (the difficulty setting), the next unbeaten
+  boss wakes by itself and comes for you at nightfall. The evening before, the ground rumbles; at dusk,
+  "The ground trembles...". The HUD shows how long you have: "Bosses asleep: 5 - one stirs in 7 nights".
+
+Every boss drops a material for its own gear, and the gear gets better along the old boss order
+(Quake Titan -> Brood Mother -> Frost Wraith -> Mire Lurker -> Inferno Colossus) - so that's still a good
+order to fight them in:
 
 | Boss | Weapon | Armor |
 |---|---|---|
@@ -150,7 +177,7 @@ drooping willows and dead trees, and murky pools. Mud slows you down a little, a
   +30 energy), **Mire Mask** (workbench, head slot: spore gas does a third of the damage and roots hold
   you half as long), and **Thornroot Whip** (13 damage, very long reach, slows enemies) from the boss's Mire Heart.
 
-**THE MIRE LURKER** joins the boss rotation (after the Frost Wraith, before the Inferno Colossus):
+**THE MIRE LURKER** sleeps in the middle of the Mire (see Bosses and their lairs):
 spore pods that burst into poison gas (purple circles), roots that burst up under you and hold you still
 (brown circles), and it sinks into the mud and erupts under someone (bubbling patch). It **heals while it's
 in the swamp**, so lure it out onto dry ground. The code lives in `swamp.py` (and the art in `art_swamp.py`).
