@@ -479,7 +479,8 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
             if (x, y + 1) in open_cells:
                 faces += "n"
             if faces:
-                self._box(out, x * C, y * C, x * C + C, y * C + C, CAVE_WALL_HEIGHT, (96, 84, 78), faces)
+                self._box(out, x * C, y * C, x * C + C, y * C + C, CAVE_WALL_HEIGHT,
+                          getattr(L, "wall_col", (96, 84, 78)), faces)      # a layer may tint its rock
         geo = self._wall_geo[key] = self._geo(out)
         return geo
 

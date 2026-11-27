@@ -154,9 +154,17 @@ Layer-generic code already handles any layer: `main.travel` / `set_layer`, under
 (`LayerInfo.cold`), darkness (`LayerInfo.dark`, used by view3d), base.py respawns, cave-wall rendering, the
 `ui.py` / `firstperson.py` underground looks, net sync (layer index) and saves.
 
-**Still assumes `"cave"`** (change it when you need to): `fx3d.py` (`vl == "cave"` for the cave ambient light
-and exit glow). Another agent is editing `fx3d.py` right now, so change it after that lands. Pets, animals,
-bosses and weather are surface-only (`"over"`) by design.
+Layer looks are on the `LayerInfo` too (all optional): `title` (the "climb down into ..." hint), `light`
+(ambient colour of the 3D light map; fx3d lifts it a little in first person), `sky` (first person
+background), `fog` (screen haze) and `ambient(game, dt, x, y)` (particles while the viewer is down there).
+Glow sprites in `L.glows` may carry `.light = (r, g, b, strength)` for a coloured light pool, and
+`L.wall_col` tints a layer's 3D wall sides. Two small tables for plug-ins (host side):
+`biomes.ZOMBIE_DROPS[kind] = fn(game, by, z, roll)` (what your enemy drops) and
+`biomes.PORTAL_LOCKS.append(fn(game, layer, pos) -> message or None)` (an exit that can't be used yet, e.g. the
+Hollows' plugged shafts). `settings.PICK_TIER` ranks pickaxes (a node that "needs" one can be mined with any
+stronger one); `NODES[kind]["hard"]` is the message when your pickaxe is too weak. Pets, animals, bosses and
+weather are surface-only (`"over"`) by design. Layer modules' nodes come after every surface module's, so
+their indices move when a surface module adds nodes - saves remap them through the spans.
 
 ## 3D objects
 

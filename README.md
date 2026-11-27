@@ -122,6 +122,25 @@ spore pods that burst into poison gas (purple circles), roots that burst up unde
 (brown circles), and it sinks into the mud and erupts under someone (bubbling patch). It **heals while it's
 in the swamp**, so lure it out onto dry ground. The code lives in `swamp.py` (and the art in `art_swamp.py`).
 
+## The Crystal Hollows (deep underground)
+
+Somewhere in the cave (two spots on every new map) a timber **headframe** stands over a shaft, faint blue
+light leaking up past the rubble that plugs it. Break the plug with an **Iron Pickaxe** (or better) and the
+shaft stays open for good: press **E** to climb down into **the Crystal Hollows**, a deeper layer of big
+caverns lit by glowing crystal clusters, with drifting glowing motes and a cool haze. Ladders lead back up.
+The regular cave now has faint **glowing fungus** along its walls, so it's not pitch black in first person.
+- **Starstone** veins hide deep in the Hollows, far from the ladders (iron pickaxe; slow to mine). There is
+  also plenty of cave crystal, iron and coal down here.
+- **Shard Crawlers** (crystal-backed spiders, drop crystal / coal), **Hollow Bats** (fast, fragile, drop meat /
+  hide) and **Geode Golems** (huge and hard-hitting; drop crystal and iron, sometimes starstone).
+- Workbench crafts: **Starstone Pickaxe** (2 wood, 2 iron ingots, 3 starstone - the fastest pickaxe),
+  **Starstone Helm** (3 starstone, 2 iron ingots, 1 leather - armor 6, the best helmet, but no spore
+  filter) and the **Starforged Blade** (your Ember Blade + 4 starstone + 3 crystal - 15 damage, quick,
+  long reach, burns: the best blade).
+- Saves remember who is down there; co-op players can be on different layers. Older saved worlds keep their
+  map exactly (they get the fungus, but not the Hollows). Code: `hollows.py`, art `art_hollows.py`,
+  creature models `tools/blender/models/hollows.py`.
+
 ## Pets
 
 Tame an animal by holding its favourite food and right-clicking it (wolf: meat, boar & rabbit: berries,

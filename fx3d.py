@@ -33,7 +33,12 @@ PX, PY, PZ, VX, VY, VZ, LIFE, MAXL, SIZE, GROW, CR, CG, CB, CA, GRAV, DRAG, ADD,
 # ----------------------------------------------------------------- colour grading
 WHITE = (1.0, 1.0, 1.0)
 NIGHT = (0.15, 0.18, 0.36)
-CAVE_AMBIENT = (0.12, 0.11, 0.16)
+CAVE_AMBIENT = (0.12, 0.11, 0.16)       # underground layers can set their own (biomes.LayerInfo.light)
+FP_UNDERGROUND_LIFT = 1.7               # first person underground: the walls loom right in front of you,
+FP_UNDERGROUND_ADD = 0.035              # so lift the ambient a little (it was nearly black)
+STONY = {"golem", "crawler"}            # enemies that spray stone chips when hit (plug-ins add theirs)
+GATHER_COL = {"iron": (176, 130, 104), "coal": (54, 54, 58), "crystal": (150, 220, 255)}   # mining dust
+SPARKLE = {"crystal"}                   # nodes that also throw glittering sparks when mined
 _GRADE = [               # (phase, multiply colour) - see DUSK_START / NIGHT_START / DAWN_START
     (0.00, (1.00, 0.80, 0.66)),               # sunrise: warm
     (0.06, (1.00, 0.93, 0.85)),
@@ -326,7 +331,7 @@ class FX3D:
         # ---- hits: sparks and blood when something starts flashing
         for z in L.zombies:
             if self._fx_edge(z, "_fx_fl", z.flash > 0) and near(z.center_x, z.center_y):
-                if z.kind in ("golem", "crawler"):
+                if z.kind in STONY:
                     self._fx_hit(name, z.center_x, z.center_y, 26, (120, 110, 104), stone=True)
                 else:
                     self._fx_hit(name, z.center_x, z.center_y, 26, (110, 26, 30))
@@ -380,10 +385,10 @@ class FX3D:
             col = (84, 150, 60) if kind == "bush" else (230, 180, 60)
             self.fx_puff(name, x, y, 20, col, 6, 70, 60, 0.9, 2.4, grav=120, drag=2, spread=16)
         else:                      # rock and ores
-            col = {"iron": (176, 130, 104), "coal": (54, 54, 58), "crystal": (150, 220, 255)}.get(kind, (140, 136, 130))
+            col = GATHER_COL.get(kind, (140, 136, 130))
             self.fx_puff(name, x, y, 18, col, 7, 130, 140, 0.6, 2.4, grav=460, drag=1)
             self.fx_puff(name, x, y, 8, (160, 154, 146), 4, 36, 14, 0.7, 7, a=0.35, grow=24, spread=12)
-            if kind == "crystal":
+            if kind in SPARKLE:
                 self.fx_puff(name, x, y, 22, (200, 240, 255), 5, 140, 60, 0.3, 1.6, add=True, drag=4)
             else:
                 self.fx_puff(name, x, y, 18, (255, 220, 150), 3, 180, 50, 0.15, 1.4, add=True, drag=5)
@@ -422,7 +427,11 @@ class FX3D:
             for g in L.glows:                     # campfires and braziers (and any other lit fire)
                 if g.visible:
                     fl = 1 + 0.05 * math.sin(t * 11 + g.center_x) + 0.03 * math.sin(t * 27 + g.center_y)
-                    ext((g.center_x, g.center_y, 0.5, g.width * 0.72 * fl, 1.0, 0.74, 0.46, 0.95 * k))
+                    lc = getattr(g, "light", None)        # e.g. crystal glows: their own colour (r, g, b, a)
+                    if lc:
+                        ext((g.center_x, g.center_y, 0.5, g.width * 0.72 * fl) + tuple(lc[:3]) + (lc[3] * k,))
+                    else:
+                        ext((g.center_x, g.center_y, 0.5, g.width * 0.72 * fl, 1.0, 0.74, 0.46, 0.95 * k))
             centre = tuple(self.cam_pos) if self.cut else self.view_pos()
             r = self.light_radius() if not self.cut else 330
             me = self.me
@@ -446,7 +455,7 @@ class FX3D:
             for s in self.shots:
                 if s.layer == vl and s.kind != "arrow":
                     ext((s.x, s.y, 0.5, 120, 1.0, 0.6, 0.25, 0.8 * k))
-            if vl == "cave":
+            if vl != "over":                      # any underground layer: light spills down the ladders
                 for s in L.exits:
                     ext((s.center_x, s.center_y, 0.5, 140, 1.0, 0.94, 0.8, 0.7))
             else:
@@ -457,11 +466,22 @@ class FX3D:
                         ext((h.x, h.y, 0.5, h.r * 1.8, 1.0, 0.5, 0.2, (1 - min(1.0, h.tele)) * 0.8 * k))
         return out
 
+    def fx_ambient(self, vl):
+        """Ambient light colour: the time of day on the surface, the layer's own light underground."""
+        if vl == "over":
+            return grade(self.phase)
+        import biomes
+        info = biomes.LAYER_INFO.get(vl)
+        amb = (info.light if info is not None else None) or CAVE_AMBIENT
+        if self.fp_on():
+            amb = tuple(min(1.0, c * FP_UNDERGROUND_LIFT + FP_UNDERGROUND_ADD) for c in amb)
+        return amb
+
     def fx_lighting(self, L, vl, dk):
         """Colour-grade the view for the time of day and light it with every light source.
         Call after the world is drawn; leaves the GUI camera active."""
         self._fx_init()
-        amb = CAVE_AMBIENT if vl == "cave" else grade(self.phase)
+        amb = self.fx_ambient(vl)
         if dk <= 0 and min(amb) > 0.995:
             return                                 # plain daylight: nothing to do
         ctx = self.ctx
