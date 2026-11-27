@@ -239,7 +239,12 @@ class Weather:
 
     def draw_weather_3d(self, vl):
         """Screen overlay drawn over the 3D world (view3d.draw_world_3d), under the HUD."""
-        if vl != "over" or not hasattr(self, "weather_shown"):
+        if vl != "over":                 # underground: just the layer's own haze (biomes.LayerInfo.fog)
+            fog = self.biome_fog() if hasattr(self, "layout") else None
+            if fog:
+                arcade.draw_lrbt_rectangle_filled(0, W, 0, H, fog)
+            return
+        if not hasattr(self, "weather_shown"):
             return
         r, g, b, a = SEASON_TINT[self.season]
         arcade.draw_lrbt_rectangle_filled(0, W, 0, H, (r, g, b, a))

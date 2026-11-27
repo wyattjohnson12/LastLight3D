@@ -106,7 +106,9 @@ class FirstPerson:
         d = (vh / 2) / math.tan(math.radians(FP_FOV_DEG) / 2)
         hy = vh / 2 - d * math.tan(self.fp_pitch)
         if vl != "over":
-            arcade.draw_lrbt_rectangle_filled(0, vw, 0, vh, (22, 18, 16))
+            import biomes
+            info = biomes.LAYER_INFO.get(vl)
+            arcade.draw_lrbt_rectangle_filled(0, vw, 0, vh, (info and info.sky) or (22, 18, 16))
             return
         hy = max(-10, min(vh + 10, hy))
         arcade.draw_lrbt_rectangle_filled(0, vw, 0, max(0, hy), (40, 58, 34))

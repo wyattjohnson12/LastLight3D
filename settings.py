@@ -314,6 +314,8 @@ NODES = {
     "coal":    {"gives": "coal", "hp": 6, "regrow": 160, "needs": "pickaxe"},
     "crystal": {"gives": "crystal", "hp": 10, "regrow": 260, "needs": "iron_pickaxe"},
 }
+# pickaxe strength: a node that "needs" a pickaxe can be mined with that pickaxe or any stronger one
+PICK_TIER = {"pickaxe": 1, "iron_pickaxe": 2}
 
 # crafting: item, cost, station needed (None = anywhere), menu tab, how many you get
 def R(item, cost, at=None, n=1):

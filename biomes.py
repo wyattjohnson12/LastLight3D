@@ -120,12 +120,19 @@ class LayerInfo:
       zombie(game, roll)    -> the kind of enemy that spawns here (roll = random 0..1)
       depth                 0 = surface, 1 = cave, 2+ = deeper (messages: going down shows `enter`)
       legacy                created for worldgen 1 worlds too (empty unless a gen_layers hook fills it)
+    Looks (all optional, every computer):
+      title                 how the "climb ..." hint names it ("into the Crystal Hollows")
+      light                 (r, g, b) 0..1 ambient light of the 3D light map down here (None = the cave's)
+      sky                   (r, g, b) first person background above the walls (None = the cave's)
+      fog                   (r, g, b, a) screen haze while the viewer is down here
+      ambient(game, dt, x, y)  particles / sounds every frame while the viewer is down here
     """
 
     def __init__(self, name, size, enter="", leave="", cold=CAVE_COLD_PER_SEC, dark=0.93, zombie=None, legacy=True,
-                 depth=2):
+                 depth=2, title="", light=None, sky=None, fog=None, ambient=None):
         self.name, self.size, self.enter, self.leave, self.depth = name, size, enter, leave, depth
         self.cold, self.dark, self.zombie, self.legacy = cold, dark, zombie, legacy
+        self.title, self.light, self.sky, self.fog, self.ambient = title or f"into the {name}", light, sky, fog, ambient
 
 
 BIOMES = {}                  # name -> Biome (every registered module)
@@ -133,8 +140,13 @@ LAYER_INFO = {
     "over": LayerInfo("over", LEGACY_SIZE, "", "", 0.0, 0.0, depth=0),
     "cave": LayerInfo("cave", CAVE_SIZE, "UNDERGROUND. It's cold and dark - bring a torch. Ore and crystal down here!",
                       "Back to the surface.", CAVE_COLD_PER_SEC, 0.93,
-                      lambda game, roll: "golem" if roll < 0.18 + 0.02 * game.day else "crawler", depth=1),
+                      lambda game, roll: "golem" if roll < 0.18 + 0.02 * game.day else "crawler", depth=1,
+                      title="into the cave"),
 }
+LAYER_INFO["over"].title = "to the surface"
+# Small plug-in tables (host / solo):
+ZOMBIE_DROPS = {}            # enemy kind -> fn(game, by, z, roll): what a plug-in's enemy drops (main.kill_zombie)
+PORTAL_LOCKS = []            # fn(game, layer, pos) -> message or None: this exit can't be used yet (main.travel)
 _cache = {}
 
 
@@ -475,8 +487,12 @@ class BiomeWorld:
             b.update(self, dt)
 
     def biome_ambient(self, dt):
-        """Every computer, every frame: the viewer's biome particles."""
+        """Every computer, every frame: the viewer's biome particles (or the layer's, underground)."""
         if self.view_layer != "over":
+            info = LAYER_INFO.get(self.view_layer)
+            if info is not None and info.ambient is not None:
+                x, y = self.view_pos()
+                info.ambient(self, dt, x, y)
             return
         x, y = self.view_pos()
         b = get(self.biome_at((x, y)))
@@ -486,7 +502,8 @@ class BiomeWorld:
     def biome_fog(self):
         """(r, g, b, a) haze for where the viewer stands, blended over the borders; None = none."""
         if self.view_layer != "over":
-            return None
+            info = LAYER_INFO.get(self.view_layer)
+            return info.fog if info is not None else None
         w = self.biome_weights(self.view_pos(), 260)
         col, a = [0.0, 0.0, 0.0], 0.0
         for name, k in w.items():
@@ -565,6 +582,18 @@ class BiomeWorld:
             if lb == layer and math.hypot(pb[0] - pos[0], pb[1] - pos[1]) < 5:
                 return la, pa
         return None
+
+    def portal_lock(self, layer, pos):
+        """A message if the exit at (layer, pos) can't be used yet (PORTAL_LOCKS), else None."""
+        for f in PORTAL_LOCKS:
+            msg = f(self, layer, pos)
+            if msg:
+                return msg
+        return None
+
+    def layer_title(self, layer):
+        info = LAYER_INFO.get(layer)
+        return info.title if info else f"into the {layer}"
 
     def layer_cold(self, layer):
         info = LAYER_INFO.get(layer)

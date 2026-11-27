@@ -712,6 +712,11 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         ex = self.near_exit(p)
         if not ex:
             return
+        lock = self.portal_lock(p.layer, ex.position)    # biomes.PORTAL_LOCKS, e.g. a plugged shaft
+        if lock:
+            self.say(lock, 3, to=p)
+            self.play("mine", 0.15, to=p)
+            return
         far = self.portal_from(p.layer, ex.position)     # biomes.py: over <-> cave, cave <-> deep, ...
         if far is not None:
             layer, (x, y) = far
@@ -989,12 +994,10 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             return
         n = min(nodes, key=lambda n: dist(n.position, (px, py)))
         need = NODES[n.kind].get("needs")
-        if need == "pickaxe" and item not in ("pickaxe", "iron_pickaxe"):
-            self.say("You need a pickaxe to mine that.", 1.5, to=p)
-            self.play("mine", 0.15, to=p)
-            return
-        if need == "iron_pickaxe" and item != "iron_pickaxe":
-            self.say("Crystal is too hard - you need an IRON pickaxe.", 1.8, to=p)
+        if need and PICK_TIER.get(item, 0) < PICK_TIER.get(need, 99):     # better pickaxes mine everything
+            msg = NODES[n.kind].get("hard") or ("You need a pickaxe to mine that." if need == "pickaxe" else
+                                                "Crystal is too hard - you need an IRON pickaxe.")
+            self.say(msg, 1.8, to=p)
             self.play("mine", 0.15, to=p)
             return
         mult = w.get("harvest", {}).get(n.kind, 1) if item else 1
@@ -1153,7 +1156,9 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             by.kills += 1
             self.stat(by, "zombies")
             roll = random.random()
-            if z.kind == "golem":
+            if z.kind in biomes.ZOMBIE_DROPS:          # plug-in enemies (e.g. hollows.py)
+                biomes.ZOMBIE_DROPS[z.kind](self, by, z, roll)
+            elif z.kind == "golem":
                 self.give(by, "crystal", 1, z.position)
                 self.give(by, "iron_ore", 2)
             elif z.kind == "crawler":

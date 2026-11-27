@@ -8,6 +8,7 @@ import arcade
 
 import art
 import art_extra  # noqa: F401  (registers the new icons)
+import biomes
 import savegame
 from settings import *
 
@@ -351,7 +352,13 @@ class UI:
             return f"{inter}  open TEAM STORAGE  (crafting nearby uses it automatically)"
         ex = self.near_exit(me)
         if ex:
-            return f"{inter}  climb {'down into the cave' if me.layer == 'over' else 'back up to the surface'}"
+            far = self.portal_from(me.layer, ex.position)      # biomes.py: any layer (cave, deep...)
+            lock = self.portal_lock(me.layer, ex.position)
+            if lock:
+                return lock
+            to = far[0] if far else "over"
+            down = biomes.depth(to) > biomes.depth(me.layer)
+            return f"{inter}  climb {'down ' if down else 'back up '}{self.layer_title(to)}"
         if self.near_pond(me):
             return f"{inter}  drink & fill flask"
         t = self.tame_target()
