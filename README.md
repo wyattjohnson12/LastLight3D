@@ -97,7 +97,7 @@ Every boss drops a material for its own gear, and each boss's gear beats the one
 | Brood Mother | **Brood Fang** - 5.5 damage, very fast stabs, venom: 3 damage/sec for 4s (works on bosses too) | **Chitin Armor** (body) armor 12, warmth 3, move 10% faster |
 | Frost Wraith | **Frost Spear** - 11 damage, huge reach, chills | **Frost Cloak** (cloak) armor 4, warmth 14 |
 | Mire Lurker | **Thornroot Whip** - 13 damage, long reach, slows | **Mire Mask** (head) armor 4, filters spore gas |
-| Inferno Colossus | **Ember Blade** - 13 damage, quick, sets enemies on fire | - |
+| Inferno Colossus | **Ember Blade** - 13 damage, quick, sets enemies on fire | **Ember Crown** (head) armor 6 + **Obsidian Plate** (body) armor 15, both fire-proof (see the Ashlands) |
 
 ## The world and its biomes
 
@@ -121,6 +121,36 @@ drooping willows and dead trees, and murky pools. Mud slows you down a little, a
 spore pods that burst into poison gas (purple circles), roots that burst up under you and hold you still
 (brown circles), and it sinks into the mud and erupts under someone (bubbling patch). It **heals while it's
 in the swamp**, so lure it out onto dry ground. The code lives in `swamp.py` (and the art in `art_swamp.py`).
+
+## The Ashlands (volcanic biome)
+
+The Inferno Colossus's home: black ash and basalt, charred dead trees, smoking vents and **lava cracks**
+glowing in the ground (they light up the night). In the middle lies the Colossus's caldera, a lava pool
+ringed by obsidian spires and vents. Only on new (big) maps.
+- **Lava burns** about 14 health a second and you keep burning for a moment after you step off. Armor and
+  potions don't help: watch where you walk. Only fire-proof gear protects you.
+- **Ash storms** blow in every so often: the air turns orange-grey and thick, you walk a bit slower, and the
+  ash drains your energy and health, unless you wear a **Mire Mask** or an **Ember Crown** (or sit in a hut).
+- Resources: **Obsidian** spires (iron pickaxe), **Vents** (pickaxe: Sulfur), coal and iron seams (pickaxe),
+  and **charred trees** that crumble into coal. The ground is warm, so you don't get cold here.
+- **Fire Beetles**: armoured, neutral bugs. Crowd one or hit it and it bites, and the bite sets you on fire.
+  They drop **Beetle Shell** and **Embers**.
+- New crafts: **Fire Pots** from sulfur (1 sulfur + 1 ember + 1 stone = 3 pots, made anywhere),
+  **Ember Crown** (workbench: 3 obsidian, 1 Ember Heart, 4 embers, 2 iron ingots) and **Obsidian Plate**
+  (workbench: 6 obsidian, 1 Ember Heart, 4 beetle shells, 3 iron ingots). The Colossus drops 2 Ember Hearts.
+
+The gear ladder (best last):
+
+| Armor | Slot | Armor | Extra |
+|---|---|---|---|
+| Titan Plate | body | 10 | warmth 2 |
+| Chitin Armor | body | 12 | warmth 3, move 10% faster |
+| Frost Cloak | cloak | 4 | warmth 14 |
+| Mire Mask | head | 4 | warmth 1, filters spore gas and ash storms, roots hold you half as long |
+| **Ember Crown** | head | **6** | warmth 2, filters spore gas and ash storms, **halves lava and burning** |
+| **Obsidian Plate** | body | **15** | warmth 4, **halves lava and burning** (with the Ember Crown: immune) |
+
+The code is in `ashlands.py` (art in `art_ash.py`, the beetle's 3D model in `tools/blender/models/ashlands.py`).
 
 ## Pets
 

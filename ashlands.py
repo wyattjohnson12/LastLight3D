@@ -40,11 +40,11 @@ NAME = "ash"
 LAVA_DPS = 14.0              # standing on a lava crack (armor doesn't help; fire-proof gear does)
 BURN_SECONDS = 1.6           # ...and you keep burning this long after stepping off
 BURN_DPS = 5.0
-BITE_BURN = 2.5              # a fire beetle's bite sets you burning this long
+BITE_BURN = 1.5              # a fire beetle's bite sets you burning this long
 STORM_SLOT = DAY_CYCLE_SECONDS / 3   # the sky is checked for an ash storm every slot of game clock
 STORM_CHANCE = 0.42          # chance a slot has a storm (it fills the middle 60% of the slot)
 STORM_ENERGY = 1.8           # per second, breathing ash without a mask
-STORM_HEALTH = 0.7
+STORM_HEALTH = 1.2
 STORM_SPEED = 0.88           # walking into the storm without a mask
 HEAT = -0.9                  # the ground is warm (negative cold per second)
 BEETLE_SPACE = 70            # fire beetles bite anyone who crowds them this close
@@ -90,7 +90,7 @@ for _k, _old, _new in (("mire_mask", " (the best helmet)", ""),
         ITEMS[_k]["desc"] = ITEMS[_k]["desc"].replace(_old, _new)
 
 ANIMALS["fire_beetle"] = {"hp": 14, "speed": 95, "temper": "defend", "drops": {"beetle_shell": 1, "ember": 2},
-                          "tame": None, "chance": 0, "job": None, "dmg": 8,
+                          "tame": None, "chance": 0, "job": None, "dmg": 7,
                           "desc": "Fire Beetle: armoured, neutral - until you crowd it. Its bite burns."}
 for _b in ("forest", "mire"):              # wildlife tables that say nothing about beetles default to 2:
     if _b in biomes.BIOMES and biomes.BIOMES[_b].animals is not None:     # beetles live in the ash only
@@ -186,11 +186,18 @@ def gen_surface(gen):
         for a, b, hw in art_ash.CRACKS[v]:
             _add_seg(game, (p[0] + a[0], p[1] + a[1]), (p[0] + b[0], p[1] + b[1]), hw)
         game.ash_cracks.append(p)
-        lava_spots.append((p[0], p[1], 82))
+        lava_spots.append((p[0], p[1], 96))
 
     # the Colossus's caldera: a lava pool, spires and vents around it, cracks running out of it
+    pool_ok = False
+    for k in range(40):                    # the nearest open ground to the region's middle
+        a, d = k * 2.4, 30 * k
+        p = (centre[0] + math.cos(a) * d, centre[1] + math.sin(a) * d)
+        if gen.biome_at(p) == NAME and gen.free(p, 150, gap=0):
+            centre, pool_ok = p, True
+            break
+    game.ash_lair = centre
     cx, cy = centre
-    pool_ok = gen.free(centre, 150, gap=0)
     if pool_ok:
         over.ground.append(_sprite(art_ash.lava_pool(), centre))
         over.glows.append(_sprite(art.glow(200, (255, 100, 30)), centre))
@@ -200,7 +207,7 @@ def gen_surface(gen):
         for k in range(6):
             a = k / 6 * math.tau + rng.uniform(-0.3, 0.3)
             p = (cx + math.cos(a) * 240, cy + math.sin(a) * 190)
-            if gen.free(p, 70, gap=0):
+            if gen.free(p, 100, gap=0):
                 crack(p, rng.randint(0, 7))
     lair = []
     for k in range(11):
@@ -214,7 +221,7 @@ def gen_surface(gen):
         if placed >= 120:
             break
         p = gen.spot(NAME, margin=140)
-        if p and gen.free(p, 60, gap=0) and all(math.hypot(p[0] - x, p[1] - y) > 150 for x, y, _ in lava_spots):
+        if p and gen.free(p, 100, gap=0) and all(math.hypot(p[0] - x, p[1] - y) > 150 for x, y, _ in lava_spots):
             crack(p, rng.randint(0, 7))
             placed += 1
 
@@ -233,10 +240,10 @@ def gen_surface(gen):
     looks = {"obsidian": lambda: art_ash.obsidian(rng.randint(0, 2)), "vent": lambda: art_ash.vent(rng.randint(0, 2)),
              "charred_tree": lambda: art_ash.charred_tree(rng.randint(0, 2)),
              "ash_coal": lambda: art_ash.ash_ore("coal"), "ash_iron": lambda: art_ash.ash_ore("iron")}
-    for kind, count, rad in (("charred_tree", 80, 40), ("vent", 32, 40), ("ash_coal", 34, 36),
-                             ("ash_iron", 22, 36), ("obsidian", 26, 36)):
+    for kind, count, rad in (("obsidian", 26, 30), ("vent", 30, 30), ("ash_iron", 22, 30), ("ash_coal", 34, 30),
+                             ("charred_tree", 80, 30)):
         placed = 0
-        for _ in range(count * 8):
+        for _ in range(count * 30):
             if placed >= count:
                 break
             p = gen.spot(NAME, margin=120)
@@ -430,53 +437,43 @@ biomes.register(AshBiome(
 ))
 
 
+
+
 # =========================================================================== 3D shapes (shapes3d.SHAPES)
 def _register_shapes():
+    """See the how-to at the top of shapes3d.py. Obsidian: glossy faceted spires; vents: crusted cones with a
+    glowing throat; charred trees: a bare trunk with forking branches and embers in the bark (no canopy)."""
     S3 = shapes3d
-    if hasattr(S3, "Part"):          # the part-based shape system (see the how-to at the top of shapes3d.py)
-        P, tube, ball, cone, disc = S3.Part, S3.tube, S3.ball, S3.cone, S3.disc
-        S3.SHAPES["obsidian"] = S3.crystal_cluster(n=5, height=2.7, seed=31, spread=0.42, sides=5)
-        crater = [(1.0, 0.0, 0.95, 0.62), (0.86, 0.42, 0.86, 0.82), (0.58, 1.0, 0.62, 0.98), (0.42, 1.16, 0.44, 1.06),
-                  (0.32, 1.02, 0.32, 0.8), (0.24, 0.78, 0.2, 0.7)]
-        S3.SHAPES["vent"] = S3.Shape([
-            P(crater, sides=9, jitter=0.14),
-            P(disc(0.26, z=0.86), color=(255, 132, 40), glow=1.0, sides=8),                 # the molten throat
-            P(ball(2), at=(0.55, 0.3, 0.12), size=(0.24, 0.2, 0.16), color=(214, 196, 70), sides=5, jitter=0.2),
-            P(ball(2), at=(-0.45, -0.5, 0.1), size=(0.2, 0.18, 0.14), color=(190, 170, 60), sides=5, jitter=0.2),
-        ], foot=(0.9, 0.9), cut=0.2)
-        rnd = random.Random(41)
-        bark, height = (42, 36, 34), 2.5
-        parts = [P(tube(0.19, 0.07, height, shade=(0.6, 0.9)), color=bark, sides=6, jitter=0.12),
-                 P(cone(0.32, 0.5), color=_mix(bark, 0.85), sides=6, jitter=0.3)]           # root flare
-        for i in range(5):
-            a = i / 5 * math.tau + rnd.uniform(-0.3, 0.3)
-            z = height * rnd.uniform(0.45, 0.82)
-            lean = rnd.uniform(0.75, 1.15)
-            ln = rnd.uniform(0.7, 1.0)
-            parts.append(P(tube(0.075, 0.025, ln), at=(0, 0, z), tilt=math.cos(a) * lean, roll=math.sin(a) * lean,
-                           color=bark, sides=4))
-            ex, ey = math.cos(a) * ln * math.sin(lean), math.sin(a) * ln * math.sin(lean)
-            b = a + rnd.choice((-0.6, 0.6))
-            parts.append(P(tube(0.035, 0.01, ln * 0.6), at=(ex, ey, z + ln * math.cos(lean) * 0.9),
-                           tilt=math.cos(b) * 0.5, roll=math.sin(b) * 0.5, color=bark, sides=3))
-        for i in range(3):                         # embers still glowing in the burnt bark
-            a = i * 2.1
-            parts.append(P(ball(2), at=(math.cos(a) * 0.13, math.sin(a) * 0.13, 0.5 + i * 0.45),
-                           size=(0.05, 0.05, 0.09), color=(255, 110, 40), glow=1.0, sides=4))
-        S3.SHAPES["charred_tree"] = S3.Shape(parts, foot=(0.9, 0.9), cut=0.2)
-    else:                            # the ring-stack shape system
-        Sh = S3.Shape
-        S3.SHAPES["obsidian"] = Sh([(1.0, 0.0, 0.9, 0.55), (0.86, 0.4, 0.76, 0.8), (0.56, 0.85, 0.55, 1.0),
-                                    (0.42, 1.4, 0.42, 1.18), (0.2, 2.2, 0.24, 1.32), (0.0, 2.85, 0.0, 1.5)],
-                                   foot=(0.85, 0.85), segs=5, phase=0.3, jitter=0.38, cut=0.2)
-        S3.SHAPES["vent"] = Sh([(1.0, 0.0, 0.95, 0.62), (0.86, 0.42, 0.86, 0.82), (0.58, 1.0, 0.62, 0.98),
-                                (0.42, 1.16, 0.44, 1.06), (0.32, 1.02, 0.32, 1.2), (0.2, 0.8, 0.18, 1.35),
-                                (0.0, 0.76, 0.0, 1.45)], foot=(0.9, 0.9), segs=9, jitter=0.14, cut=0.2)
-        # a bare burnt trunk: root flare, a knotted, gnarled bole and a broken, split top (plain charcoal)
-        S3.SHAPES["charred_tree"] = Sh([(0.36, 0.0, 0, -0.5), (0.2, 0.3, 0, -0.62), (0.17, 1.0, 0, -0.75),
-                                        (0.2, 1.25, 0, -0.8), (0.13, 1.5, 0, -0.85), (0.1, 2.1, 0, -0.9),
-                                        (0.15, 2.3, 0, -0.95), (0.04, 2.65, 0, -1.0)],
-                                       foot=(0.9, 0.9), segs=6, solid=(42, 36, 34), jitter=0.32, cut=0.2)
+    P, tube, ball, cone, disc = S3.Part, S3.tube, S3.ball, S3.cone, S3.disc
+    S3.SHAPES["obsidian"] = S3.crystal_cluster(n=5, height=2.7, seed=31, spread=0.42, sides=5)
+    crater = [(1.0, 0.0, 0.95, 0.62), (0.86, 0.42, 0.86, 0.82), (0.58, 1.0, 0.62, 0.98), (0.42, 1.16, 0.44, 1.06),
+              (0.32, 1.02, 0.32, 0.8), (0.24, 0.78, 0.2, 0.7)]
+    S3.SHAPES["vent"] = S3.Shape([
+        P(crater, color=S3.Fill(0.78, 0.5), sides=9, jitter=0.14),       # filled: no see-through rim
+        P(disc(0.27, z=0.84), color=(255, 132, 40), glow=1.0, sides=8),                 # the molten throat
+        P(ball(2), at=(0.55, 0.3, 0.12), size=(0.24, 0.2, 0.16), color=(214, 196, 70), sides=5, jitter=0.2),
+        P(ball(2), at=(-0.45, -0.5, 0.1), size=(0.2, 0.18, 0.14), color=(190, 170, 60), sides=5, jitter=0.2),
+    ], foot=(0.9, 0.9), cut=0.2)
+    rnd = random.Random(41)
+    bark, height = (42, 36, 34), 2.5
+    parts = [P(tube(0.19, 0.07, height, shade=(0.6, 0.9)), color=bark, sides=6, jitter=0.12),
+             P(cone(0.32, 0.5), color=_mix(bark, 0.85), sides=6, jitter=0.3)]           # root flare
+    for i in range(5):
+        a = i / 5 * math.tau + rnd.uniform(-0.3, 0.3)
+        z = height * rnd.uniform(0.45, 0.82)
+        lean = rnd.uniform(0.75, 1.15)
+        ln = rnd.uniform(0.7, 1.0)
+        parts.append(P(tube(0.075, 0.025, ln), at=(0, 0, z), tilt=math.cos(a) * lean, roll=math.sin(a) * lean,
+                       color=bark, sides=4))
+        ex, ey = math.cos(a) * ln * math.sin(lean), math.sin(a) * ln * math.sin(lean)
+        b = a + rnd.choice((-0.6, 0.6))
+        parts.append(P(tube(0.035, 0.01, ln * 0.6), at=(ex, ey, z + ln * math.cos(lean) * 0.9),
+                       tilt=math.cos(b) * 0.5, roll=math.sin(b) * 0.5, color=bark, sides=3))
+    for i in range(3):                         # embers still glowing in the burnt bark
+        a = i * 2.1
+        parts.append(P(ball(2), at=(math.cos(a) * 0.15, math.sin(a) * 0.15, 0.5 + i * 0.45),
+                       size=(0.035, 0.035, 0.06), color=(255, 110, 40), glow=1.0, sides=4))
+    S3.SHAPES["charred_tree"] = S3.Shape(parts, foot=(0.9, 0.9), cut=0.2)
     S3.SHAPES["ash_coal"] = S3.SHAPES["ash_iron"] = S3.SHAPES["rock"]
 
 
@@ -485,3 +482,9 @@ def _mix(c, f):
 
 
 _register_shapes()
+
+try:                                 # the Colossus armor's colours on the survivor model (models3d.py)
+    import models3d
+    models3d.GEAR_COL.update({"ember_crown": (60, 48, 84), "obsidian_plate": (46, 38, 58)})
+except ImportError:
+    pass

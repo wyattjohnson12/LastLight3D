@@ -116,7 +116,7 @@ def main_test():
             if p and gen.free(p, 30):
                 gen.add_node(main.Node("rock", main.art.rock(0), *p), gen.over.rocks)
 
-    biomes.register(biomes.Biome("zz_test", order=25, region=False, gen_surface=extra))
+    biomes.register(biomes.Biome("zz_test", order=999, region=False, gen_surface=extra))
     try:
         g.setup(seed)
         after = rows(g)

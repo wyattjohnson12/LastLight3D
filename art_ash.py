@@ -26,6 +26,16 @@ LAVA_HOT = (255, 214, 120)
 
 
 # =========================================================================== ground
+def _wrap_blur(layer, r):
+    """Gaussian blur that wraps round the edges (so a tile still joins its neighbours seamlessly)."""
+    w, h = layer.size
+    big = Image.new("RGBA", (w * 3, h * 3))
+    for i in range(3):
+        for j in range(3):
+            big.paste(layer, (i * w, j * h))
+    return big.filter(ImageFilter.GaussianBlur(r)).crop((w, h, 2 * w, 2 * h))
+
+
 def _ground_img(seed):
     """A seamless 256px tile of ash and basalt (drawn wrapped so neighbouring tiles join up)."""
     rnd = random.Random(seed)
@@ -41,7 +51,7 @@ def _ground_img(seed):
         for ox in (-n, 0, n):
             for oy in (-n, 0, n):
                 d.ellipse([x + ox - r, y + oy - r, x + ox + r, y + oy + r], fill=col)
-    img.alpha_composite(blobs.filter(ImageFilter.GaussianBlur(8)))
+    img.alpha_composite(_wrap_blur(blobs, 8))
     d = ImageDraw.Draw(img)
     for _ in range(9):          # dark basalt plates with hairline cracks
         x, y = rnd.randint(0, n), rnd.randint(0, n)

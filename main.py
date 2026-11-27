@@ -994,7 +994,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             self.play("mine", 0.15, to=p)
             return
         if need == "iron_pickaxe" and item != "iron_pickaxe":
-            self.say("Crystal is too hard - you need an IRON pickaxe.", 1.8, to=p)
+            self.say(f"{ITEMS[NODES[n.kind]['gives']]['name']} is too hard - you need an IRON pickaxe.", 1.8, to=p)
             self.play("mine", 0.15, to=p)
             return
         mult = w.get("harvest", {}).get(n.kind, 1) if item else 1
