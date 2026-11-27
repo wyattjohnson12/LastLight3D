@@ -20,10 +20,11 @@ What's here:
     strength from the tundra: it heals while it stands in the snow, so drag the fight out of it.
   * Ambient: falling snow everywhere in the tundra (and past the winter snow line), pale fog.
 
-3D: every new object has a shapes3d.SHAPES entry (registered here at import, shapes3d.py is not edited):
-  "pine" (trunk + three solid cone tiers + snow crown, opaque), "whitewood", "ice_rock", "frost_crystal".
-Tundra pines are ordinary "tree" nodes with variants 20-22; shapes3d.VARIANT_SHAPES maps them to "pine"
-(view3d.py reads that table). Creature 3D models: tools/blender/models_tundra.py.
+3D: every new object has a shapes3d.SHAPES entry built with shapes3d's builders (registered here at import):
+  "pine" (conifer: trunk + four solid tiers, snowy rims and crown), "whitewood" (canopy_tree, pale bark),
+  "ice_rock" (boulder + crystal spikes), "frost_crystal" (glowing crystal_cluster). Tundra pines are ordinary
+  "tree" nodes with variants 20-22, picked through shapes3d.VARIANTS["tree"]. Creature 3D models are built in
+  Blender: tools/blender/models/tundra.py -> assets/models/snow_fox.glb etc. (docs/MODELS.md).
 
 Rules followed (docs/BIOMES.md): generation uses gen.rng only and only ADDS nodes (shared trees are restyled,
 never moved); the cold / spawns / boss regen run on the host; the looks run on every computer.
@@ -106,37 +107,24 @@ RECIPES[:] = [r for tab in CRAFT_TABS.values() for r in tab]   # same list objec
 import art_tundra  # noqa: E402  (after the tables: registers the new art)
 
 # =========================================================================== 3D shapes (shapes3d.SHAPES entries)
-_STUMP = [(0.82, 0.0, 0.8, 0.6), (0.76, 0.45, 0.78, 0.85), (0.6, 0.55, 0.62, 1.0), (0.0, 0.55, 0.0, 1.0)]
-# A pine: bark trunk, then three SOLID cone tiers. Each tier is an underside (dark, so from eye level you see
-# a closed skirt, never inside it) and an upper slope from its snowy rim (picture zone 0.8-0.93) up over the
-# needles; the top tier closes in the white snow crown. The picture is opaque everywhere these rings sample it.
-shapes3d.SHAPES["pine"] = shapes3d.Shape(
-    [(0.14, 0.0, 0, -0.7), (0.1, 1.05, 0, -0.95),
-     (0.22, 0.62, 0.55, 0.5), (1.0, 0.4, 0.93, 0.78), (0.32, 1.45, 0.5, 1.0),
-     (0.2, 1.24, 0.55, 0.52), (0.78, 1.06, 0.92, 0.86), (0.24, 2.08, 0.45, 1.04),
-     (0.16, 1.88, 0.5, 0.55), (0.56, 1.72, 0.9, 0.92), (0.0, 3.0, 0.0, 1.14)],
-    foot=(0.9, 0.9), segs=8, phase=0.2, solid=(92, 64, 44), breaks=(2, 5, 8), cut=0.05, alt=_STUMP)
-# whitewood: a tall pale trunk and a closed round crown of frosted leaves
-shapes3d.SHAPES["whitewood"] = shapes3d.Shape(
-    [(0.16, 0.0, 0, -0.78), (0.11, 1.55, 0, -1.0),
-     (0.12, 1.3, 0.5, 0.58), (0.85, 1.52, 0.85, 0.8), (1.0, 1.92, 0.95, 0.92), (0.86, 2.36, 0.8, 1.0),
-     (0.5, 2.7, 0.5, 1.06), (0.0, 2.86, 0.0, 1.1)],
-    foot=(0.9, 0.9), segs=8, solid=(214, 218, 224), breaks=(2,), cut=0.05)
-# a block of ice with a crystal spike rising out of it
-shapes3d.SHAPES["ice_rock"] = shapes3d.Shape(
-    [(1.0, 0.0, 0.8, 0.75), (0.98, 0.45, 0.78, 0.92), (0.7, 0.95, 0.58, 1.05), (0.35, 1.2, 0.3, 1.15),
-     (0.0, 1.28, 0.0, 1.2),
-     (0.42, 0.8, 0.4, 1.0), (0.34, 1.9, 0.3, 1.15), (0.0, 2.5, 0.0, 1.3)],
-    foot=(0.85, 0.85), segs=6, phase=0.3, jitter=0.25, breaks=(5,), cut=0.05)
-# frost crystal: a bright five-sided spike in a collar of shards
-shapes3d.SHAPES["frost_crystal"] = shapes3d.Shape(
-    [(1.0, 0.0, 0.8, 0.8), (0.92, 0.35, 0.7, 1.0), (0.0, 0.5, 0.0, 1.15),
-     (0.55, 0.3, 0.55, 1.05), (0.48, 1.5, 0.42, 1.3), (0.0, 2.4, 0.0, 1.55)],
-    foot=(0.85, 0.85), segs=5, phase=0.5, jitter=0.3, breaks=(3,), cut=0.05)
-# kinds whose look depends on the variant: view3d.py draws ("tree", 20) as "pine"
-shapes3d.VARIANT_SHAPES = getattr(shapes3d, "VARIANT_SHAPES", {})
-for _v in range(3):
-    shapes3d.VARIANT_SHAPES[("tree", PINE_TREE + _v)] = "pine"
+S3 = shapes3d
+# A snow-laden pine: bark trunk and four solid drooping cone tiers. The picture (art_tundra.pine) is painted in
+# zones by distance from the centre, so every tier picks up a white snowy rim, dark needles above it and the
+# white crown at the tip; it is opaque everywhere the tiers sample it and Fill()ed anyway: never see-through.
+S3.SHAPES["pine"] = S3.conifer(tiers=4, height=3.35, radius=0.95, trunk=0.55, needles=S3.Fill(0.5, 0.2),
+                               bark=(92, 64, 44), sway=0.05)
+# whitewood: a tall pale trunk and a closed crown of frosted leaf blobs
+S3.SHAPES["whitewood"] = S3.canopy_tree(trunk=2.1, crown=(2.35, 0.6), blobs=4, leaves=S3.Fill(0.5, 0.3),
+                                        bark=(214, 218, 224), seed=5700, sway=0.08)
+# a block of ice with crystal spikes growing out of it
+S3.SHAPES["ice_rock"] = S3.Shape(S3.boulder(height=0.75, lump=0.3, sides=6).parts +
+                                 S3.crystal_cluster(n=4, height=1.9, color=(176, 222, 246), glow=0.12, seed=5800,
+                                                    spread=0.35).parts, foot=(0.85, 0.85), turn=0.3, cut=0.25)
+# frost crystal: a glowing cluster of five-sided spikes (plus a light pool sprite on the ground, see below)
+S3.SHAPES["frost_crystal"] = S3.crystal_cluster(n=5, height=2.3, color=(150, 226, 255), glow=0.6, seed=21)
+# tundra pines are "tree" nodes with variants 20-22: chain the tree picker
+_tree_pick = S3.VARIANTS.get("tree", lambda s: "tree")
+S3.VARIANTS["tree"] = lambda s: "pine" if PINE_TREE <= s.variant < PINE_TREE + 3 else _tree_pick(s)
 
 
 def _dist(a, b):
