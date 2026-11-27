@@ -179,3 +179,11 @@ blade clumps, ...). Another agent is writing it right now. Add new entries; don'
 
 Nobody but the owner of `biomes.py` changes the layout, `world._build_v2` or the hook plumbing. If you need
 a new hook, add it in `biomes.Biome.HOOKS` + one `BiomeWorld` method + one call site, and note it here.
+
+### Hooks added by terrain.py
+
+`detour`, `swing`, `use`, `build_ok`, `save`, `load`, `event`, `draw3d` (see the `biomes.Biome` docstring).
+Call sites: `main.step_body` (terrain blocks zombies / animals; bosses and `ANIMALS[...]["swims"]` wade),
+`main.attack` (swing), `main.consume` (non-food use, e.g. seeds), `main.placement` (build_ok), `main.apply_event`
+(`["bio", module, ...]`, send with `game.biome_emit`), `savegame` (`"biomes"` field), `view3d.draw_world_3d`
+(draw3d stages "ground" / "solid"). `main.near_pond` also drinks from `water` (via `game.water_near`).

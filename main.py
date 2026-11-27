@@ -446,6 +446,8 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             self.cut = None
         elif k == "stats":
             self.progress_event(ev)      # progress.py: my run stats, sent by the host
+        elif k == "bio":
+            self.biome_event(ev)         # biomes.py: a plug-in's own event (["bio", module, ...])
         else:
             self.swamp_event(ev)       # swamp.py: roots holding you in place
 
@@ -655,7 +657,11 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
     # ------------------------------------------------------------------ eating & interacting
     def consume(self, p, item):
         info = ITEMS[item]
-        if info["kind"] != "food" or not self.take(p, item):
+        if info["kind"] != "food":
+            if p.inv.get(item, 0) > 0:
+                self.biome_use(p, item)        # biomes.py: e.g. planting seeds (terrain.py)
+            return
+        if not self.take(p, item):
             return
         p.hunger = min(STAT_MAX, p.hunger + info.get("hunger", 0))
         p.thirst = min(STAT_MAX, p.thirst + info.get("thirst", 0))
@@ -690,7 +696,8 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             self.say("Nothing useful to eat or drink right now.", 1.5, to=p)
 
     def near_pond(self, p):
-        return p.layer == "over" and any(dist(p.pos, s.position) < 150 for s in self.over.ponds)
+        return p.layer == "over" and (any(dist(p.pos, s.position) < 150 for s in self.over.ponds)
+                                      or self.water_near(p.pos))       # biomes.py: rivers & lakes too
 
     def near_exit(self, p):
         for s in self.layers[p.layer].exits:
@@ -788,8 +795,10 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         if ok:
             ok = not arcade.check_for_collision_with_lists(ghost, [L.solid, L.huts, L.zombies, L.traps, L.exits]
                                                             + self.defense_blockers(L))
-            if ok and item != "hut" and item not in TRAP_KINDS:
+            if ok and item != "hut" and item not in TRAP_KINDS and item not in defenses.WALK_THROUGH:
                 ok = not arcade.check_for_collision_with_list(ghost, self.player_list)
+            if ok:
+                ok = self.biome_build_ok(item, x, y, p.layer)     # biomes.py: no campfires in rivers...
         return item, ghost, ok
 
     def place(self, p, target):
@@ -954,6 +963,8 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             self.shoot(p, w)
             return
         if w.get("repair") and self.repair(p):     # repair.py: hammer aimed at a building
+            return
+        if self.biome_swing(p, item, w):           # biomes.py: fishing rods, hoes, picking crops...
             return
         allround = bool(w.get("quake"))
 
@@ -1201,6 +1212,8 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
                 continue
             z = Zombie(self.biome_zombie_kind(kind, x, y, layer), x, y, self.next_zid, layer)   # biomes.py
             if arcade.check_for_collision_with_lists(z, [L.solid, L.huts]):
+                continue
+            if at is None and self.terrain_blocked(x, y, layer):     # not in a river / inside a cliff
                 continue
             if layer != "over" and not arcade.get_sprites_at_point((x, y), L.ground):
                 continue
@@ -1698,8 +1711,13 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             s.center_y += oy / d * step
             return hit_now, 0.0
         blocked, moved = [], 0.0
+        land = bool(blockers) and bool(biomes.with_hook("blocked"))   # rivers / cliffs (biomes.py terrain hooks)
+        if land and self.body_blocked(s, s.center_x, s.center_y):
+            land = False                       # already in the water (spawned / knocked there): let it out
         s.center_x += mvx
         hit = arcade.check_for_collision_with_lists(s, blockers)
+        if not hit and land and self.body_blocked(s, s.center_x, s.center_y):
+            hit = [biomes]                     # stopped by the land itself (not a Structure)
         if hit:
             s.center_x -= mvx
             blocked += hit
@@ -1707,11 +1725,17 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             moved += abs(mvx)
         s.center_y += mvy
         hit = arcade.check_for_collision_with_lists(s, blockers)
+        if not hit and land and self.body_blocked(s, s.center_x, s.center_y):
+            hit = [biomes]
         if hit:
             s.center_y -= mvy
             blocked += hit
         else:
             moved += abs(mvy)
+        if land and biomes in blocked and getattr(s, "detour", 1) <= 0:
+            d = self.body_detour(s, mvx, mvy)     # e.g. terrain.py: head for the nearest ford / bridge
+            if d:
+                s.detour_dir, s.detour = d, 1.3
         return blocked, moved
 
     def _update_zombies(self, L, dt):
@@ -1830,7 +1854,8 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             if kind == "bee":
                 return self.spawn_bee(alive)
             a = Animal(kind, x, y, self.next_aid)
-            if arcade.check_for_collision_with_lists(a, [self.over.solid, self.over.huts]):
+            if arcade.check_for_collision_with_lists(a, [self.over.solid, self.over.huts]) or \
+                    self.body_blocked(a, x, y):          # not in a river / inside a cliff
                 continue
             self.next_aid += 1
             self.over.animals.append(a)
@@ -3085,7 +3110,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         elif kind == "build":
             tx, ty = self.aim_world()
             self.action("place", x=tx, y=ty, s=self.me.selected)
-        elif kind == "food":
+        elif kind in ("food", "seed"):
             self.action("use", item=sel)
         elif kind == "throw":
             me = self.me

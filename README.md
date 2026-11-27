@@ -107,6 +107,21 @@ different arrangement on every map, lie the **Frostwood Tundra**, the **Stone Hi
 For modders and contributors: `docs/BIOMES.md` explains how biomes, terrain and extra underground layers
 plug in (`biomes.py`).
 
+## The Riverlands, rivers, cliffs and farming
+
+New worlds have wide **rivers** winding through the meadow and around the forest, plus a lake. Deep water
+blocks everyone (zombies too), so cross at the shallow **fords** (stepping stones), on the road bridges, or
+build your own **Bridge** (Build tab) over the water. Rock **cliffs** make natural chokepoints. Dirt **roads**
+lead from the spawn to every region (walk 15% faster); lay **Stone Path** tiles at your base (20% faster).
+Drink from any river with E / B.
+
+* **Fishing:** craft a Fishing Rod, swing at water to cast, swing again when you get a BITE. Cook fish at a campfire.
+* **Clay** lumps on the river banks -> **Bricks** (furnace) -> **Brick Wall** (300 health).
+* **Farming:** a **Hoe** tills grass into a farm plot; right-click with Wheat / Carrot Seeds (from tall grass)
+  or a Berry Sapling. Crops grow in 3 stages over ~2 days (faster near water / in rain); hit them to harvest.
+  Wheat -> Bread, fish + carrots -> River Stew. Ducks on the rivers drop feathers (better arrows).
+* Ground around your base and Base Flag slowly wears down to dirt.
+
 ## The Mire (swamp biome)
 
 Somewhere out past the meadows (a different spot on every map) lies **the Mire**: dark bog ground,
