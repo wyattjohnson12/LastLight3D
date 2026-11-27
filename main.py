@@ -996,7 +996,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         need = NODES[n.kind].get("needs")
         if need and PICK_TIER.get(item, 0) < PICK_TIER.get(need, 99):     # better pickaxes mine everything
             msg = NODES[n.kind].get("hard") or ("You need a pickaxe to mine that." if need == "pickaxe" else
-                                                "Crystal is too hard - you need an IRON pickaxe.")
+                                                f"{ITEMS[NODES[n.kind]['gives']]['name']} is too hard - you need an IRON pickaxe.")
             self.say(msg, 1.8, to=p)
             self.play("mine", 0.15, to=p)
             return
