@@ -34,6 +34,7 @@ import models3d
 import shapes3d
 import terrain3d
 import ui
+import water3d
 from settings import *
 
 PITCH = math.radians(CAM_PITCH_DEG)
@@ -835,7 +836,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
             self.flat(L.ground)
         self.flat(L.decor)
         self.biome_draw3d(L, vl, "ground")     # biomes.py: rivers, roads, worn ground (terrain.py)
-        self.flat(L.ponds)
+        water3d.draw_ponds(self, L.ponds)     # water3d.py: ponds with moving water
         if vl == "over":
             self.flat(L.exits)
         self.flat(L.traps)

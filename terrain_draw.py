@@ -6,8 +6,9 @@ grass / flower clumps and ford stones (shapes3d), bobbers. Built once per world,
 import math
 
 import terrain_map as TM
+import water3d
 
-WATER_Z, BANK_W = -4.0, 16.0
+BANK_W = 16.0
 
 
 def _patch_view():
@@ -34,43 +35,76 @@ def _quad(out, a, b, c, d, col_ab, col_cd=None):
         out.extend(col)
 
 
+def _bank(out, inner, outer, z_in, z_out):
+    """A strip of wet mud lying on the ground from just under the water's edge out onto the grass
+    (inner / outer: two points each, along the edge). Fades out into the grass at the far side."""
+    wet, dry = (0.36, 0.28, 0.19, 1.0), (0.45, 0.36, 0.24, 0.5)
+    _quad(out, (*inner[0], z_in[0]), (*inner[1], z_in[1]), (*outer[1], z_out[1]), (*outer[0], z_out[0]), wet, dry)
+
+
 def _build(game, r):
+    """Water (water3d.py: moving ripples, sky, glints, foam), mud banks, roads and cliffs, once per world.
+    The water and banks lie ON the ground (a hair above it): on hilly worlds the ground mesh is depth tested,
+    and water sunk below it would be hidden."""
     m = r.m
     gh = game.ground_height
     water, bank, road = [], [], []
+    bz = water3d.BANK_LIFT
     for rv in m.rivers:
         pts, hw = rv.pts, rv.hw
         prev = None
         for i, p in enumerate(pts):
             dx, dy = TM._dir_at(pts, i)
             nx, ny = -dy, dx
-            h = gh(*p)
             ford = any(math.hypot(p[0] - f[0], p[1] - f[1]) < 50 for f in m.fords)
-            col = (0.42, 0.62, 0.64, 0.85) if ford else (0.17, 0.38, 0.50, 0.9)
-            row = [(p[0] + nx * s * (hw[i] + e), p[1] + ny * s * (hw[i] + e)) for s, e in
-                   ((-1, BANK_W), (-1, 0), (1, 0), (1, BANK_W))]
+            sp = water3d.flow_speed(hw[i], ford)
+            flow, depth = (dx * sp, dy * sp), (0.3 if ford else 1.0)
+            # across the river: outer bank, bank under the water, water's edge, middle, other edge...
+            offs = (-hw[i] - BANK_W, -hw[i] + 6, -hw[i], 0.0, hw[i], hw[i] - 6, hw[i] + BANK_W)
+            row = [(p[0] + nx * o, p[1] + ny * o) for o in offs]
+            z = [gh(*q) for q in row]
+            # where another river or the lake carries on past this edge (a junction, the stream's mouth) the
+            # water is open: no bank froth there ("shore" = as if mid-river)
+            edge = [hw[i] if all(m.cell(p[0] + nx * s * (hw[i] + o), p[1] + ny * s * (hw[i] + o)) & TM.WATER
+                                 for o in (28, 44)) else 0.0 for s in (-1, 1)]
             if prev is not None:
-                pr, pcol, ph = prev
-                z0, z1 = ph + WATER_Z, h + WATER_Z
-                _quad(water, (*pr[1], z0), (*pr[2], z0), (*row[2], z1), (*row[1], z1), pcol, col)
-                mud = (0.42, 0.33, 0.22, 1.0)
-                for o, w in ((0, 1), (3, 2)):
-                    _quad(bank, (*pr[o], ph), (*pr[w], ph + WATER_Z - 2), (*row[w], h + WATER_Z - 2),
-                          (*row[o], h), mud)
-            prev = (row, col, h)
+                pr, pz, pf, pd, phw, pedge = prev
+                # two halves (edge -> middle -> edge), so `shore` is the real distance to the nearest bank
+                shore, pshore = (edge[0], hw[i], edge[1]), (pedge[0], phw, pedge[1])
+                for a in (2, 3):
+                    b = a + 1
+                    old = [(pr[c], pz[c], pf, pshore[c - 2], pd) for c in (a, b)]
+                    new = [(row[c], z[c], flow, shore[c - 2], depth) for c in (a, b)]
+                    for q, zz, f, sh, d in (old[0], old[1], new[1], old[0], new[1], new[0]):
+                        water3d.vert(water, *q, zz, f, sh, d)
+                for o, w in ((0, 1), (6, 5)):
+                    _bank(bank, (pr[w], row[w]), (pr[o], row[o]), (pz[w] + bz, z[w] + bz), (pz[o] + bz, z[o] + bz))
+            prev = (row, z, flow, depth, hw[i], edge)
     for lx, ly, lr, s in m.lakes:
         n = 40
-        h = gh(lx, ly)
+        rad = [lr * (0.85 + 0.35 * TM.biomes.fbm(s, math.cos(k * math.tau / n) * 1.6 + 5,
+                                                 math.sin(k * math.tau / n) * 1.6 + 5)) for k in range(n)]
+        zc = gh(lx, ly)
+
+        def ring(k, d):
+            a = k % n * math.tau / n
+            q = (lx + math.cos(a) * (rad[k % n] + d), ly + math.sin(a) * (rad[k % n] + d))
+            return q, gh(*q)
+
         for k in range(n):
-            a0, a1 = k * math.tau / n, (k + 1) * math.tau / n
-            r0 = lr * (0.85 + 0.35 * TM.biomes.fbm(s, math.cos(a0) * 1.6 + 5, math.sin(a0) * 1.6 + 5))
-            r1 = lr * (0.85 + 0.35 * TM.biomes.fbm(s, math.cos(a1) * 1.6 + 5, math.sin(a1) * 1.6 + 5))
-            p0 = (lx + math.cos(a0) * r0, ly + math.sin(a0) * r0)
-            p1 = (lx + math.cos(a1) * r1, ly + math.sin(a1) * r1)
-            _tri(water, (lx, ly, h + WATER_Z), (*p0, h + WATER_Z), (*p1, h + WATER_Z), (0.16, 0.36, 0.5, 0.9))
-            q0 = (lx + math.cos(a0) * (r0 + BANK_W), ly + math.sin(a0) * (r0 + BANK_W))
-            q1 = (lx + math.cos(a1) * (r1 + BANK_W), ly + math.sin(a1) * (r1 + BANK_W))
-            _quad(bank, (*q0, h), (*p0, h + WATER_Z - 2), (*p1, h + WATER_Z - 2), (*q1, h), (0.42, 0.33, 0.22, 1.0))
+            # middle -> an inner ring 60 px from the shore -> the shore, so `shore` is the real distance
+            (i0, zi0), (i1, zi1) = ring(k, -60), ring(k + 1, -60)
+            (e0, ze0), (e1, ze1) = ring(k, 0), ring(k + 1, 0)
+            mid = min(rad[k % n], rad[(k + 1) % n])
+            water3d.vert(water, lx, ly, zc, shore=mid)
+            water3d.vert(water, *i0, zi0, shore=60.0)
+            water3d.vert(water, *i1, zi1, shore=60.0)
+            for q, zz, sh in ((i0, zi0, 60.0), (e0, ze0, 0.0), (e1, ze1, 0.0),
+                              (i0, zi0, 60.0), (e1, ze1, 0.0), (i1, zi1, 60.0)):
+                water3d.vert(water, *q, zz, shore=sh)
+            (u0, zu0), (u1, zu1) = ring(k, -6), ring(k + 1, -6)
+            (o0, zo0), (o1, zo1) = ring(k, BANK_W), ring(k + 1, BANK_W)
+            _bank(bank, (u0, u1), (o0, o1), (zu0 + bz, zu1 + bz), (zo0 + bz, zo1 + bz))
     for name, pts in m.roads:
         for i in range(len(pts) - 1):
             a, b = pts[i], pts[i + 1]
@@ -101,7 +135,8 @@ def _build(game, r):
             if nb < hgt:
                 lo = g + nb
                 _quad(cliff, (*a, lo), (*b, lo), (*b, top), (*a, top), dark, rock)
-    r.geo = {k: game._geo(v) for k, v in (("water", water), ("bank", bank), ("road", road), ("cliff", cliff))}
+    r.geo = {k: game._geo(v) for k, v in (("bank", bank), ("road", road), ("cliff", cliff))}
+    r.geo["water"] = water3d.geometry(game, water)
 
 
 def draw3d(game, L, vl, stage):
@@ -118,9 +153,11 @@ def draw3d(game, L, vl, stage):
     ctx = game.ctx
     if stage == "ground":
         ctx.enable(ctx.BLEND)
-        for k in ("bank", "water", "road"):
-            if r.geo[k]:
-                r.geo[k].render(box)
+        if r.geo["bank"]:
+            r.geo["bank"].render(box)
+        water3d.draw(game, r.geo["water"])
+        if r.geo["road"]:
+            r.geo["road"].render(box)
         game.flat(r.worn)
         return
     if r.geo["cliff"]:
