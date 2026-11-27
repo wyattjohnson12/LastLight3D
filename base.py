@@ -233,7 +233,7 @@ class Base:
                 return False
         else:
             near = min((_dist(p, e) for e in exits), default=9999)
-            if near < 160 or (kind == "crystal" and near < 650):
+            if near < 160 or (kind == "crystal" and near < 400):    # 7 exits on new maps: 650 left no room
                 return False
         side = int(2 * rad + (52 if layer == "over" else 30))
         probe = arcade.SpriteSolidColor(side, side, center_x=x, center_y=y)
