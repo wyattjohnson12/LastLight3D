@@ -973,6 +973,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         self.draw_kinds(L.bushes)
         self.draw_kinds(L.rocks)
         self.draw_kinds(L.builds, getattr(self, "struct_ver", 0), MESH_BUILDS)
+        self.draw_packs_3d(vl)       # backpack.py: packs dropped where survivors died
         self.stand(L.flames, lift=2, nudge=2, cut=0.05, sun=False)
         if self.models3d_mode(fp):      # models3d.py: real low-poly 3D creatures (Blender-built models)
             self.models3d_creatures(L, fp)
@@ -1039,6 +1040,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         self.gui.use()
         self.draw_air_hazards()
         self.draw_pet_marks(L)
+        self.draw_pack_marks(vl)     # backpack.py: "Your pack 2:10" / "Sam's pack"
 
         if dk > 0:
             self.use_world3d()
@@ -1065,6 +1067,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
                 if p is not self.me and p.alive and p.layer == vl:
                     self.lift_to_ground(p.sprite.center_x, p.sprite.center_y)
                     arcade.draw_circle_filled(p.sprite.center_x, p.sprite.center_y, 30, p.color + (int(70 * dk),))
+            self.draw_pack_glows(vl, dk)     # backpack.py: a dropped pack's lamp and a faint pool of light
             for b in L.bosses:     # bosses are always visible - terrifying silhouettes
                 self.lift_to_ground(b.center_x, b.center_y)
                 arcade.draw_circle_filled(b.center_x, b.center_y, b.radius + 30, (255, 80, 40, int(40 * dk)))

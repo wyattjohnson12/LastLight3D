@@ -4,6 +4,7 @@ gamepad.py - Xbox (and most other) controller support.
 Plug the controller in (USB or Bluetooth) any time - it's picked up automatically.
 
     Left stick ........ move            Right stick ... aim
+    Left stick click .. sprint (until you stop moving; uses energy)
     A / RT (hold) ..... attack, chop, mine, pick
     LT ................ place building / use item
     X (hold) .......... rest

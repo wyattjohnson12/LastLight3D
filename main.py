@@ -30,6 +30,7 @@ import art_bees
 import art_defenses
 import art_extra
 import art_gear
+import backpack
 import defenses
 import firstperson
 import intro
@@ -106,6 +107,9 @@ class Survivor:
         self.face = 0.0
         self.attacking = False
         self.resting = False
+        self.sprinting = False    # holding sprint (SHIFT while moving, or the left stick clicked) - backpack.py
+        self.pad_sprint = False   # controller: the left stick was clicked, until you stop moving
+        self.sprint_seen = False  # online client: the host says this teammate is sprinting (dust)
         self.attack_cd = 0.0
         self.swing = 0.0
         self.swings = 0
@@ -145,6 +149,7 @@ class Survivor:
 
 # =========================================================================== game
 class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, post3d.Post3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
+                backpack.Backpacks,
                 progress.Progress, weather.Weather, defenses.Defenses, swamp.Swamp, ui.UI, arcade.Window):
     def __init__(self):
         # "Smooth edges" (MSAA, options in post3d.py): arcade asks for 4 samples and quietly skips them if the
@@ -282,6 +287,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         self.animal_t = 0.0
         self.weather_setup()       # weather.py: seasons & weather
         self.base_setup()          # base.py: base areas, cleared spots, nodes turning up elsewhere
+        self.packs_setup()         # backpack.py: the packs dropped where survivors died
 
     def add_player(self, name, conn=None, pid=None):
         if pid is None:
@@ -750,7 +756,10 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         self.play("travel", 0.3, to=p)
 
     def interact(self, p):
-        """E / B: use a cave entrance or drink - whichever is at hand (storage opens on your own screen)."""
+        """E / B: pick up your backpack, use a cave entrance or drink - whichever is at hand (storage opens on
+        your own screen)."""
+        if self.pickup_pack(p, backpack.REACH):     # backpack.py
+            return
         if self.near_exit(p):
             self.travel(p)
         elif self.near_pond(p):
@@ -1438,6 +1447,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
                 self._update_defenses(dt)     # defenses.py: turrets shoot
                 self._update_world(dt)
                 self.update_swamp(dt)      # swamp.py: the Drowned rise at night
+                self.update_packs(dt)      # backpack.py: dropped packs - pick-ups, expiry, their zombies
                 self.biome_update(dt)      # biomes.py: every plug-in's per-frame logic
         else:
             if not self.cut:
@@ -1480,15 +1490,21 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         busy = bool(self.ui_open or self.paused or self.cut or self.intro)
         dx = (arcade.key.D in k or arcade.key.RIGHT in k) - (arcade.key.A in k or arcade.key.LEFT in k)
         dy = (arcade.key.W in k or arcade.key.UP in k) - (arcade.key.S in k or arcade.key.DOWN in k)
-        rest = arcade.key.LSHIFT in k or arcade.key.RSHIFT in k
+        shift = arcade.key.LSHIFT in k or arcade.key.RSHIFT in k
+        sprint = rest = False
         attack = self.mouse_down
         pad = self.pad
         if self.use_pad:
             if not busy:
                 if pad.left != (0, 0):
                     dx, dy = pad.left
-                rest = rest or "x" in pad.down
+                if "leftstick" in pad.pressed:      # click the left stick: sprint until you stop moving
+                    me.pad_sprint = not me.pad_sprint
+                rest = "x" in pad.down
                 attack = attack or "a" in pad.down or "rt" in pad.down
+            if dx == 0 and dy == 0:
+                me.pad_sprint = False
+            sprint = me.pad_sprint
             if self.fp_on():
                 pass                     # first person: the right stick looks around (fp_tick)
             elif pad.right != (0, 0):
@@ -1501,16 +1517,25 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         if busy:
             dx = dy = 0
             attack = False
+            me.pad_sprint = False
+        if shift:              # one key: SHIFT while moving = sprint, SHIFT standing still = rest
+            if dx or dy:
+                sprint = True
+            else:
+                rest = True
         if self.fp_on():
             dx, dy = self.fp_move(me, dx, dy)   # firstperson.py: walk where you look
         me.move = (dx, dy)
-        me.resting = rest
+        me.resting = rest             # (holding X rests even with the stick pushed: you stop to rest)
+        me.sprinting = sprint and not rest
         me.attacking = attack and me.alive and not rest
 
     def move_player(self, p, dt):
         dx, dy = p.move
         moving = (dx or dy) and not p.resting
         speed = PLAYER_SPEED if p.energy > 0 else TIRED_SPEED
+        if self.sprint_active(p):             # backpack.py: sprinting needs energy (the host drains it)
+            speed *= SPRINT_MULT
         if p.warmth <= 0:
             speed *= 0.75
         speed *= self.swamp_speed(p, dt)     # swamp.py: mud, bog pools, grasping roots
@@ -1611,7 +1636,10 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         p.tp += 1
         p.respawn_t = -1
         self.say(f"{p.name} is back on their feet!", 3)
-        self.say("You're back at your base with empty pockets. Check the team storage!", 5, to=p)
+        if self.pack_of(p):          # backpack.py
+            self.say("You're back at your base. Your backpack lies where you fell - follow the arrow!", 6, to=p)
+        else:
+            self.say("You're back at your base with empty pockets. Check the team storage!", 5, to=p)
 
     def down_player(self, p):
         p.alive = False
@@ -1622,16 +1650,25 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         p.held.visible = False
         self.burst(p.sprite.center_x, p.sprite.center_y, (200, 40, 40), 24, 160, 4, 0.8, layer=p.layer)
         self.play("die", 0.4, to=p)
-        lost = sum(p.inv.values()) + sum(1 for v in p.equip.values() if v)
+        dropped, old_lost = self.drop_pack(p)     # backpack.py: it all lies where you fell (an older pack is lost)
         p.inv = {}
         p.hotbar = [None] * HOTBAR_SLOTS
         p.equip = {s: None for s in ARMOR_SLOTS}
+        p.sprinting = p.pad_sprint = False
         night = DUSK_START <= self.phase < DAWN_START
         p.respawn_t = -1.0 if night else float(DAY_RESPAWN_SECONDS)
         when = "at dawn" if night else f"in {DAY_RESPAWN_SECONDS} seconds"
-        self.say(f"YOU DIED - and lost everything you carried ({lost} items). You'll be back {when}.", 7, to=p)
-        if len(self.players) > 1:
+        old = "  Your old backpack is lost for good." if old_lost else ""
+        if len(self.players) > 1:    # (first, so on the host's own screen their own message wins)
             self.say(f"{p.name} died! They'll be back {when}.", 4)
+        if not dropped:
+            self.say(f"YOU DIED - with nothing on you. You'll be back {when}.{old}", 7, to=p)
+        elif night:
+            self.say(f"YOU DIED - your backpack lies where you fell. Back at dawn - then you have one day to get it!"
+                     f"{old}", 8, to=p)
+        else:
+            self.say(f"YOU DIED - your backpack lies where you fell. Back in {DAY_RESPAWN_SECONDS}s - get it before "
+                     f"dawn!{old}", 8, to=p)
 
     def _update_survivor(self, p, dt):
         if not p.alive:
@@ -1664,8 +1701,8 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
 
         p.hunger -= HUNGER_DECAY_PER_SEC * dt
         p.thirst -= THIRST_DECAY_PER_SEC * dt
-        if moving:
-            p.energy -= ENERGY_DECAY_PER_SEC * dt
+        if self.sprint_active(p):    # walking is free; sprinting wears you out (backpack.py)
+            p.energy -= SPRINT_ENERGY_PER_SEC * dt
         if p.resting:
             boost = 2.0 if p.in_hut else 1.5 if fire else 1.0
             p.energy += REST_RESTORE_PER_SEC * boost * dt
@@ -1769,10 +1806,13 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         zl = list(L.zombies)
         for z in zl:
             tgt = min(alive, key=lambda p: dist(p.pos, z.position)) if alive else None
-            ppos = tgt.pos if tgt else z.position
+            goal = self.pack_loiter(z, tgt)   # backpack.py: zombies drawn to a dropped pack hang around it
+            if goal is not None:
+                tgt = None
+            ppos = goal or (tgt.pos if tgt else z.position)
             dx, dy = ppos[0] - z.center_x, ppos[1] - z.center_y
             d = math.hypot(dx, dy) or 1
-            vx, vy = (dx / d, dy / d) if tgt else (0.0, 0.0)
+            vx, vy = (dx / d, dy / d) if (tgt or goal) else (0.0, 0.0)
             if z.kind not in ("brute", "golem"):
                 for f in fires:
                     fd = dist(f.position, z.position)
@@ -2404,6 +2444,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
                 p.held.center_y = p.sprite.center_y + math.sin(a) * 26
                 p.held.angle = -math.degrees(a)
         self.swamp_visuals(dt)       # swamp.py: glowcaps, fireflies
+        self.sprint_visuals(dt)      # backpack.py: dust behind sprinters
 
     def _update_camera(self, dt):
         vx, vy = self.view_pos()
@@ -2505,6 +2546,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             p.face = net.num(m.get("f"), p.face)
             p.move = (net.num(m.get("mx"), 0, -1, 1), net.num(m.get("my"), 0, -1, 1))
             p.resting = bool(m.get("r"))
+            p.sprinting = bool(m.get("sp")) and not p.resting   # a flag only: the host sets the speed / energy
             p.attacking = bool(m.get("a")) and p.alive and not self.cut
             p.arriving = bool(m.get("ar"))
             p.selected = net.whole(m.get("s"), p.selected, 0, HOTBAR_SLOTS - 1)
@@ -2590,6 +2632,8 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         if self.storage_ver != self.sent_storage_ver:
             common["sto"] = self.storage
             self.sent_storage_ver = self.storage_ver
+        common["bp"] = self.packs_net()           # backpack.py: where the dropped packs are
+        common["spr"] = [p.id for p in self.players.values() if self.sprint_active(p)]
         common["eq"] = {str(p.id): [p.equip.get(s) or "" for s in ARMOR_SLOTS] for p in self.players.values()}
         self.events_all = []
         for p in self.players.values():
@@ -2714,6 +2758,10 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             self.seen_swings[pid] = swings
         for pid in [k for k in self.players if k not in seen]:
             self.remove_player(self.players[pid])
+        self.packs_apply(m.get("bp"))      # backpack.py
+        sprinting = set(m.get("spr") or [])
+        for p in self.players.values():
+            p.sprint_seen = p.id in sprinting
         for pid, eq in m.get("eq", {}).items():    # what everyone else is wearing
             other = self.players.get(int(pid))
             if other is not None and other is not self.me:
@@ -2835,7 +2883,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             return
         self.conn.send({"t": "in", "x": r1(me.sprite.center_x), "y": r1(me.sprite.center_y), "f": round(me.face, 3),
                         "mx": round(me.move[0], 2), "my": round(me.move[1], 2), "r": int(me.resting),
-                        "a": int(me.attacking), "s": me.selected, "tp": me.tp, "ar": int(bool(self.intro))},
+                        "sp": int(me.sprinting), "a": int(me.attacking), "s": me.selected, "tp": me.tp, "ar": int(bool(self.intro))},
                        droppable=True)
 
     def action(self, a, **kw):
@@ -3271,7 +3319,9 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         if "dpdown" in pr:
             self.action("pets")
         if "b" in pr:
-            if self.near_storage(me) or self.near_exit(me) or self.near_pond(me):
+            pk = self.pack_of(me)       # backpack.py: B next to your pack picks it up
+            at_pack = pk is not None and pk.layer == me.layer and dist(pk.pos, me.pos) < backpack.REACH
+            if at_pack or self.near_storage(me) or self.near_exit(me) or self.near_pond(me):
                 self.interact_key()
             else:
                 self.action("quick")

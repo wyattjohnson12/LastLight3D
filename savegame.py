@@ -9,7 +9,8 @@ Only the person running the world (solo player or co-op host) saves - joiners ar
 
 What's in a save: the world seed + "worldgen" version (the map is rebuilt from them - saves without
 "worldgen" are the legacy map, see docs/BIOMES.md) + "spans" (which nodes each biome module made), what's been chopped/mined/built,
-team storage, the time and day, the day/night lengths, zombies, bosses, pets, and every survivor.
+team storage, the time and day, the day/night lengths, zombies, bosses, pets, dropped backpacks (backpack.py)
+and every survivor.
 
 Survivors are remembered by name. When a co-op friend joins a resumed game with the same name, they
 get their own backpack, armor, stats and pets back. The host (or player 1 in split screen) always gets
@@ -227,6 +228,7 @@ class SaveGame:
             "pets": [[a.kind, round(a.center_x, 1), round(a.center_y, 1), owner_key(a), PET_MODES.index(a.mode),
                       a.hp, a.carry, a.name, a.armor] for a in self.over.animals if a.pet and owner_key(a)],
             "players": records,
+            "packs": self.packs_save(),       # backpack.py: packs dropped where survivors died
         }
 
     # ------------------------------------------------------------------ loading
@@ -299,3 +301,4 @@ class SaveGame:
             self.amap[a.aid] = a
         self.away = dict(data.get("players", {}))
         self.biome_load(data.get("biomes"))   # biomes.py (older saves: None)
+        self.packs_load(data.get("packs"))    # backpack.py (older saves: none)

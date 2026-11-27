@@ -94,6 +94,7 @@ class UI:
             return
         self.draw_offscreen_friends()
         self.draw_hud()
+        self.draw_pack_pointer()      # backpack.py: the arrow to your dropped pack (on top of the HUD)
         self.draw_boss_bar()
         if not getattr(self, "_split", False):   # split screen draws these full-size afterwards
             if self.ui_open == "inv":
@@ -381,10 +382,10 @@ class UI:
         if self.near_kind(me.pos, me.layer, "workbench", 150):
             return "Workbench here: open the backpack for advanced crafting"
         if self.near_fire(me.pos, me.layer, 150):
-            return f"By the fire: warm up, cook food   |   {'hold X' if pad else 'SHIFT'} rest to heal"
+            return f"By the fire: warm up, cook food   |   {'hold X' if pad else 'SHIFT (standing)'} rest to heal"
         if pad:
-            return "RT/A hit & gather   L-stick move   R-stick aim   LB/RB hotbar   hold X rest"
-        return "Left-click  hit / gather     WASD  move     SHIFT  rest"
+            return "RT/A hit & gather   L-stick move (click: sprint)   R-stick aim   LB/RB hotbar   hold X rest"
+        return "Left-click  hit / gather     WASD  move     SHIFT  sprint (standing: rest)"
 
     # ------------------------------------------------------------------ backpack & crafting
     INV_COLS, INV_ROWS, SLOT, GAP = 5, 5, 62, 8
@@ -1145,7 +1146,8 @@ class UI:
             ("E  |  B", "open storage, use cave entrance, drink"),
             ("Q  |  B", "quick eat / drink"), ("P  |  D-pad up", "Pets menu: names, orders, pet armor"),
             ("F  |  D-pad down", "quick order for all pets: follow / work / stay"),
-            ("SHIFT  |  hold X", "rest (heals in a hut or by a fire)"),
+            ("SHIFT + move  |  click L-stick", "sprint (uses energy - walking is free)"),
+            ("SHIFT standing  |  hold X", "rest (heals in a hut or by a fire)"),
         ]
         top = H - 120
         self.panel(W / 2 - 330, W / 2 + 330, top - len(lines) * 28 - 16, top + 14, 160)
@@ -1153,7 +1155,7 @@ class UI:
             y = top - 12 - i * 28
             self.txt(f"hk_{i}", k, W / 2 - 40, y, (255, 214, 140), 13, anchor_x="right", bold=True)
             self.txt(f"hv_{i}", v, W / 2 - 20, y, (230, 230, 230), 13)
-        tips = ["Die and you lose what you carry - keep valuables in a Storage Bin.",
+        tips = ["Die and your backpack drops where you fell - get it back before the next dawn (or lose it).",
                 "Nights are cold: stay by fire, in a hut, or wear warm clothes (fur cloak!).",
                 "Workbench -> leather, armor, iron gear.  Furnace -> iron ingots.  Caves -> iron, coal, crystal."]
         for i, tline in enumerate(tips):
@@ -1165,12 +1167,11 @@ class UI:
         arcade.draw_lrbt_rectangle_filled(0, W, H / 2 - 70, H / 2 + 90, (40, 0, 0, 160))
         self.txt("d1", "YOU DIED", W / 2, H / 2 + 34, (255, 80, 70), 44, anchor_x="center", bold=True)
         if me.respawn_t > 0:
-            sub = f"Back on your feet in {int(me.respawn_t) + 1}s - at your base, with empty pockets."
+            sub = f"Back on your feet in {int(me.respawn_t) + 1}s - at your base, with the starting things."
         else:
             left = int(self.secs_until(DAWN_START))
             sub = f"You died at night - you'll come back at dawn ({left}s)."
             if self.fast_forward:
                 sub = "Everyone is down... the night passes quickly."
         self.txt("d2", sub, W / 2, H / 2 - 10, (240, 230, 230), 15, anchor_x="center")
-        self.txt("d3", "Everything you carried is gone. Things in TEAM STORAGE are safe.", W / 2, H / 2 - 40,
-                 (220, 190, 190), 12, anchor_x="center")
+        self.txt("d3", self.pack_dead_lines(), W / 2, H / 2 - 40, (220, 190, 190), 12, anchor_x="center")

@@ -20,11 +20,16 @@ PLAYER_SPEED = 210         # pixels per second
 TIRED_SPEED = 110          # speed when energy is empty
 STAT_MAX = 100
 
-HUNGER_DECAY_PER_SEC = 0.55
-THIRST_DECAY_PER_SEC = 0.8
-ENERGY_DECAY_PER_SEC = 0.9      # while walking
+# Hunger and thirst drain per real second (whatever the day length): a full bar lasts about 5 minutes
+# (hunger) and 4 minutes (thirst). Summer days / rain change thirst on top (weather.py).
+HUNGER_DECAY_PER_SEC = 0.33
+THIRST_DECAY_PER_SEC = 0.42
+# Walking is free. Sprinting (hold SHIFT while moving / click the left stick) is faster and costs energy;
+# with no energy left you can't sprint, and you walk slowly (TIRED_SPEED) until you rest.
+SPRINT_MULT = 1.55              # sprint speed = PLAYER_SPEED x this
+SPRINT_ENERGY_PER_SEC = 3.0     # a full bar of energy is ~33 seconds of sprinting
 SWING_ENERGY_COST = 1.2
-REST_RESTORE_PER_SEC = 12.0     # hold SHIFT
+REST_RESTORE_PER_SEC = 12.0     # hold SHIFT standing still (hold X on a controller)
 STARVE_DAMAGE_PER_SEC = 2.5
 THIRST_DAMAGE_PER_SEC = 3.5
 NATURAL_REGEN_PER_SEC = 0.6     # when hunger & thirst are above half
@@ -76,8 +81,8 @@ CLEAR_SECONDS = (60, 160)         # clear spells last a bit longer
 RAIN_FIRE_OUT_PER_SEC = 0.012     # chance per second that rain puts out an unsheltered campfire (storm x3)
 RAIN_FIRE_OUT_SECONDS = 14        # how long a rained-out fire takes to dry off and catch again
 SHELTER_RADIUS = 110              # a fire this close to a hut is sheltered from the rain
-RAIN_THIRST_PER_SEC = 0.35        # standing out in the rain: thirst drains this much slower
-SUMMER_THIRST_PER_SEC = 0.2       # summer days: thirst drains this much faster
+RAIN_THIRST_PER_SEC = 0.18        # standing out in the rain: thirst drains this much slower
+SUMMER_THIRST_PER_SEC = 0.1       # summer days: thirst drains this much faster
 WINTER_COLD_PER_SEC = 1.3         # extra warmth lost on winter nights away from a fire / hut
 SNOW_COLD_PER_SEC = 0.6           # extra cold while it snows (day or night)
 STORM_COLD_PER_SEC = 0.6

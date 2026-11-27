@@ -56,12 +56,33 @@ That's it - run the game again and you have every update.
 | Quick eat / drink | Q | B |
 | Pets menu | P | D-pad up |
 | Quick order for all pets | F | D-pad down |
-| Rest | SHIFT | hold X |
+| Sprint (uses energy) | hold SHIFT while moving | click the left stick while moving |
+| Rest | hold SHIFT standing still | hold X |
 | Scroll a long list (backpack, crafting, storage, pets) | mouse wheel, UP / DOWN, PAGE UP / DOWN | right stick |
 | Pause / help | ESC | Menu |
 | Save game (on the pause screen) | S | X |
 | Fullscreen on / off | F11 or Cmd+F | |
 | First person on / off | V | Click the right stick |
+
+## Staying alive: food, water, energy - and dying
+
+- **Hunger** lasts about 5 minutes from full, **thirst** about 4 (summer days make you thirstier, rain
+  less). Eat, drink at ponds and rivers, fill your flask.
+- **Walking is free.** **Sprint** (hold SHIFT while moving, or click the left stick) runs about 1.5x as
+  fast but burns energy (a full bar is about half a minute of running). Swinging tools and weapons uses a
+  little energy too. With no energy left you can't sprint and you trudge slowly until you **rest** (SHIFT
+  standing still / hold X - faster by a fire or in a hut).
+- **When you die, your backpack drops where you fell** - everything you carried and everything you wore,
+  on whatever layer you were on (surface or caves). You come back at your base with just the starting
+  food and water. Walk onto your pack (or press E / B next to it) to get it all back: armor goes back on
+  if the slot is free. An arrow at the edge of the screen points to it, with the distance and the time
+  left, and at night it has a faint glow and a little lamp so you can find it.
+- **It doesn't wait forever:** it's gone at the dawn after you're back on your feet. Die by day and you
+  have until the next dawn; die at night (you're back at dawn) and you have that whole day.
+- **Die again before you get it back and the old pack is lost for good.** At night a few zombies are drawn
+  to a pack nobody has picked up and hang around it (more for a fuller pack) - underground it's always
+  night. In co-op only the owner can pick a pack up; everyone else sees it as "Sam's pack". Things in
+  Team Storage are always safe.
 
 ## Saving and resuming
 
