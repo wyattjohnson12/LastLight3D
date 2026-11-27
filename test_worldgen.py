@@ -120,8 +120,17 @@ def main_test():
     try:
         g.setup(seed)
         after = rows(g)
-        assert after[:len(before)] == before, "adding a module changed earlier nodes"
-        assert "zz_test" in g.node_spans and all(g.node_spans[k] == v for k, v in spans.items())
+        assert "zz_test" in g.node_spans
+        # every other module's nodes are unchanged (layer modules' nodes come after all surface modules', so
+        # their indices may move - saves remap them through the spans)
+        for k, (s0, n0) in spans.items():
+            s1, n1 = g.node_spans[k]
+            assert n1 == n0 and [r[1:] for r in after[s1:s1 + n1]] == [r[1:] for r in before[s0:s0 + n0]], \
+                f"adding a module changed {k}'s nodes"
+        surf = [k for k in spans if not k.endswith(":layers")]
+        assert all(g.node_spans[k] == spans[k] for k in surf if spans[k][0] < g.node_spans["zz_test"][0])
+        f = biomes.remap_index(spans, g.node_spans)
+        assert all(after[f(i)][1:] == before[i][1:] for i in range(len(before))), "remapped saves line up"
     finally:
         biomes.BIOMES.pop("zz_test")
         biomes._cache.clear()
@@ -150,6 +159,41 @@ def main_test():
             g.on_update(1 / 30)
         g.on_draw()
     print("5. remapping, layers and portals OK")
+
+    # ---- 6. the Crystal Hollows (hollows.py): a plugged shaft, the iron pickaxe, the deep layer in a save
+    g.setup(seed)
+    g.players.clear()
+    g.me = g.add_player("Tester")
+    g.state = "playing"
+    assert g.hollows_seals and g.layers["deep"].ground, "worldgen 2 worlds have the Hollows"
+    seal = g.hollows_seals[0]
+    (cx, cy), dp = g.hollows_descents[0]
+    g.set_layer(g.me, "cave", (cx - 45, cy))
+    g.travel(g.me)
+    assert g.me.layer == "cave", "the plug blocks the shaft"
+    g.me.face = 0.0
+    g.me.hotbar[0], g.me.selected = "pickaxe", 0
+    g.attack(g.me)
+    assert seal.state == "full" and seal.hp == main.NODES["sealed_shaft"]["hp"], "a stone pickaxe can't break it"
+    g.me.hotbar[0] = "iron_pickaxe"
+    for _ in range(20):
+        g.attack(g.me)
+    assert seal.state == "gone"
+    g.travel(g.me)
+    assert g.me.layer == "deep", "open shaft leads down"
+    star = next(n for n in g.nodes if n.kind == "starstone")
+    assert star.layer == "deep"
+    data = json.loads(json.dumps(g.save_data()))
+    g.players.clear()
+    g.setup(999)
+    g.start(save=data)
+    assert g.me.layer == "deep" and g.hollows_seals[0].state == "gone", "saves remember the deep layer + open shaft"
+    for _ in range(3):
+        g.on_update(1 / 30)
+    g.on_draw()
+    g.setup(12345, biomes.LEGACY)
+    assert not g.hollows_seals and not len(g.layers["deep"].ground) and g.hollows_fungus, "old worlds: fungus only"
+    print("6. the Crystal Hollows: shaft, pickaxe gate, travel, save")
     g.close()
     print("world generation checks passed")
 
