@@ -10,14 +10,15 @@ collisions, AI, crafting and networking are untouched. Only the drawing is diffe
   * Trees, rocks, ores, bushes, campfires, braziers, benches, bins, turret pedestals and huts are small
     low-poly 3D shapes with their painted picture draped over them from above (shapes3d.py).
   * Everything else that stands up (survivors, zombies, animals, bosses, lanterns, gates...) is a
-    "cut-out" - the same painted picture, stood upright and turned to face the camera. In first
-    person, animals, bosses, survivors and zombies become simple 3D bodies instead.
+    "cut-out" - the same painted picture, stood upright and turned to face the camera. Animals, bosses,
+    survivors and zombies are real low-poly 3D models (models3d.py, built in Blender - docs/MODELS.md).
   * Walls (cave walls and the walls you build) are real 3D blocks.
 
 Two small custom shaders do the work, fed by the same arcade SpriteLists the 2D game already uses,
 so there is no second copy of the world to keep in sync.
 """
 import math
+import time
 from array import array
 
 import arcade
@@ -26,6 +27,7 @@ from pyglet import gl
 from pyglet.math import Mat4, Vec3
 
 import fx3d
+import models3d
 import shapes3d
 import ui
 from settings import *
@@ -37,8 +39,9 @@ UP = 1 / math.cos(PITCH)       # stretch upright cut-outs so they look as tall a
 WALL_KINDS = ("wood_wall", "stone_wall", "iron_wall")
 WALL_SIDES = {"wood_wall": (118, 80, 46), "stone_wall": (128, 128, 132), "iron_wall": (150, 156, 168)}
 TRUNK_LIFT = 34                # sprite.depth of a standing tree (stumps are 0) - shapes3d picks the shape by it
-HIVE_LIFT = 16                 # beehives hang under the canopy
-MESH_BUILDS = ("campfire", "brazier", "workbench", "storage", "arrow_turret")
+HIVE_LIFT = 16                 # beehives hang under the canopy (tilted-camera cut-out)
+HIVE_Z = 64                    # beehives: how high the bottom of the 3D hive hangs
+MESH_BUILDS = ("campfire", "brazier", "workbench", "storage", "arrow_turret", "furnace", "lantern", "gate")
 NUDGE_FLAG = 1000.0            # sprite.depth >= this means "draw a bit in front" (beehives in trees)
 
 # =========================================================================== shaders
@@ -204,7 +207,7 @@ void main() { f_color = v_col; }
 
 
 # =========================================================================== the mixin
-class View3D(fx3d.FX3D):
+class View3D(fx3d.FX3D, models3d.CreatureModels):
     """Mixed into the game window. Replaces the flat camera with a tilted 3D one."""
 
     # ------------------------------------------------------------------ camera maths
@@ -295,15 +298,39 @@ class View3D(fx3d.FX3D):
         bill["face_right"] = (1.0, 0.0)
         bill["shade"] = 1.0
         self._progs3d = (flat, bill, ctx.program(vertex_shader=BOX_VS, fragment_shader=BOX_FS))
-        geo, frag = shapes3d.program_sources(lib)
-        mesh = self._mesh3d = ctx.program(vertex_shader=vs, geometry_shader=geo, fragment_shader=frag)
-        mesh["sprite_texture"] = 0
-        mesh["uv_texture"] = 1
-        mesh["inflate"] = 1.0
+        # 3D shapes (shapes3d.py): with OpenGL 4 one draw call makes every pass of a shape (geometry shader
+        # invocations); on plain 3.3 we fall back to one draw per pass
+        self._mesh_lib, self._mesh_vs = lib, vs
+        self._mesh_progs = {}
+        self._mesh_inv = ctx.gl_version >= (4, 0)
+        try:
+            self._mesh_prog(1)
+        except Exception:
+            self._mesh_inv = False
+            self._mesh_progs = {}
+            self._mesh_prog(1)
+        self._mesh_t0 = time.perf_counter()
         self._kinds3d = {}
         self._ghost3d = arcade.SpriteList()
         self._wall_sig = {}
         self._wall_geo = {}
+
+    def _mesh_prog(self, passes, verts=shapes3d.MAX_VERTS):
+        """The shape program that draws `passes` passes of at most `verts` vertices in one go
+        (or the single fallback program)."""
+        key = (passes, verts) if self._mesh_inv else 0
+        p = self._mesh_progs.get(key)
+        if p is None:
+            geo, frag = shapes3d.program_sources(self._mesh_lib, passes if self._mesh_inv else None,
+                                                 verts if self._mesh_inv else shapes3d.MAX_VERTS)
+            p = self.ctx.program(vertex_shader=self._mesh_vs, geometry_shader=geo, fragment_shader=frag)
+            p["sprite_texture"] = 0
+            p["uv_texture"] = 1
+            p["inflate"] = 1.0
+            p["glow_pass"] = 0
+            p["ShapeBlock"] = shapes3d.BINDING
+            self._mesh_progs[key] = p
+        return p
 
     def _draw_list(self, lst, prog, blend=None, **uniforms):
         if not len(lst):
@@ -331,35 +358,35 @@ class View3D(fx3d.FX3D):
         else:
             self._draw_list(lst, self._progs3d[1], blend, lift=float(lift), nudge=float(nudge), alpha_cut=float(cut))
 
-    def mesh(self, lst, shape, cut=None, inflate=1.0, blend=None):
-        """Draw every sprite in `lst` as the 3D shape `shape` (shapes3d.SHAPES) with its picture draped on."""
+    def mesh(self, lst, shape, cut=None, inflate=1.0, blend=None, glow=False):
+        """Draw every sprite in `lst` as the 3D shape `shape` (shapes3d.SHAPES) with its picture draped on.
+        glow=True: only its glowing parts, for adding on top of the night (call with an additive blend)."""
         if not len(lst):
             return
         sh = shapes3d.SHAPES[shape]
-        p = self._mesh3d
-        p["rings"] = sh.rings
-        p["nrings"] = sh.nrings
-        p["alt_start"] = sh.alt_start
-        p["alt_below"] = sh.alt_below
-        p["breaks"] = sh.breaks
-        p["segs"] = sh.segs
-        p["phase"] = sh.phase
-        p["foot"] = sh.foot
-        p["solid"] = sh.solid
-        p["jitter"] = sh.jitter
+        if sh.ubo is None:
+            sh.ubo = self.ctx.buffer(data=sh.data)
+        sh.ubo.bind_to_uniform_block(shapes3d.BINDING)
+        p = self._mesh_prog(sh.passes, sh.verts)
         p["inflate"] = float(inflate)
         p["sun"] = self._progs3d[1]["sun"]
         p["alpha_cut"] = float(sh.cut if cut is None else cut)
+        p["time"] = time.perf_counter() - self._mesh_t0
+        p["glow_pass"] = int(glow)
         lst._init_deferred()
         old = lst.data.program
         lst.data.program = p
-        p["band_per"] = sh.band_per
         try:
-            for i in range(sh.passes):
-                p["pass_id"] = i
+            if self._mesh_inv:
                 lst.draw(blend_function=blend)
+            else:
+                for i in range(sh.passes):
+                    p["pass_id"] = i
+                    lst.draw(blend_function=blend)
         finally:
             lst.data.program = old
+            if glow:
+                p["glow_pass"] = 0
 
     def _by_kind(self, lst, ver=0):
         """The sprites of `lst` split into one SpriteList per .kind (rebuilt only when `lst` changes).
@@ -372,7 +399,7 @@ class View3D(fx3d.FX3D):
                     sub.clear()
             groups = {}
             for s in lst:
-                kind = getattr(s, "kind", "")
+                kind = shapes3d.shape_key(s)
                 if kind not in groups:
                     groups[kind] = arcade.SpriteList()
                 groups[kind].append(s)
@@ -395,6 +422,14 @@ class View3D(fx3d.FX3D):
             if sh.card_lift is not None:        # e.g. the turret's crossbow stands on its pedestal
                 s0 = sub[0]
                 self.stand(sub, lift=min(s0.width, s0.height) / 2 * sh.card_lift / UP)
+
+    def draw_kind_glows(self, lst, ver=0, shaped=None):
+        """The glowing parts of a mixed list's shapes (glowcaps, lantern glass...), added on top of the night."""
+        blend = (self.ctx.SRC_ALPHA, self.ctx.ONE)
+        for kind, sub in self._by_kind(lst, ver).items():
+            sh = shapes3d.SHAPES.get(kind) if shaped is None or kind in shaped else None
+            if sh is not None and sh.has_glow and len(sub):
+                self.mesh(sub, kind, blend=blend, glow=True)
 
     # ------------------------------------------------------------------ 3D blocks
     def _box(self, out, x0, y0, x1, y1, h, col, faces):
@@ -480,9 +515,9 @@ class View3D(fx3d.FX3D):
                         n.alpha = 255      # from your own eyes nothing needs to be see-through
                 elif full and 0 < vy - n.center_y < 170 and abs(n.center_x - vx) < 70:
                     n.alpha = 120          # don't let a tree in front hide you
-            else:   # beehive: hangs under the canopy, drawn just in front of its tree
+            else:   # beehive: a 3D hive hanging under the canopy (shapes3d "hive", raised by its depth)
                 up = n.tree is not None and n.tree.state == "full"
-                want = NUDGE_FLAG + (HIVE_LIFT if up else 0)
+                want = HIVE_Z if up else 0
                 if n.depth != want:
                     n.depth = want
 
@@ -543,7 +578,9 @@ class View3D(fx3d.FX3D):
         self.draw_kinds(L.rocks)
         self.draw_kinds(L.builds, getattr(self, "struct_ver", 0), MESH_BUILDS)
         self.stand(L.flames, lift=2, nudge=2, cut=0.05)
-        if fp:          # from eye level the painted-from-above creatures need real bodies
+        if self.models3d_mode(fp):      # models3d.py: real low-poly 3D creatures (Blender-built models)
+            self.models3d_creatures(L, fp)
+        elif fp:        # from eye level the painted-from-above creatures need real bodies
             self.mesh(L.animals, "body")
             self.mesh(self.cloak_list, "person", inflate=1.08)
             self.mesh(self.player_list, "person")
@@ -564,7 +601,7 @@ class View3D(fx3d.FX3D):
             inside = hsp is my_hut or any(p.in_hut is hsp for p in self.players.values())
             hsp.alpha = 110 if inside else 255
         self.mesh(L.huts, "hut")
-        self.draw_kinds(L.trees)
+        self.draw_kinds(L.trees, getattr(self, "nodes_ver", 0))
         if fp:
             self.fp_hide_me(False)
 
@@ -611,9 +648,14 @@ class View3D(fx3d.FX3D):
             self.flat(L.glows, blend=blend)
             ctx.enable(ctx.DEPTH_TEST)
             self.stand(L.flames, lift=2, nudge=2, cut=0.05)
+            self.draw_kind_glows(L.bushes)        # glowcaps, glowing crystals, lantern glass...
+            self.draw_kind_glows(L.rocks)
+            self.draw_kind_glows(L.builds, getattr(self, "struct_ver", 0), MESH_BUILDS)
             for e in L.eyes:
                 e.alpha = int(255 * dk)
-            if fp:      # on the zombie's 3D head, just in front of its face
+            if self.models3d_mode(fp):  # glows sit on the models' eyes / cores
+                self.models3d_glows(dk)
+            elif fp:    # on the zombie's 3D head, just in front of its face
                 self.stand(L.eyes, lift=40, nudge=16, cut=0.0, blend=blend)
             else:
                 self.stand(L.eyes, lift=16, nudge=3, cut=0.0, blend=blend)
