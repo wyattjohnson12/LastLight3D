@@ -10,8 +10,8 @@ collisions, AI, crafting and networking are untouched. Only the drawing is diffe
   * Trees, rocks, ores, bushes, campfires, braziers, benches, bins, turret pedestals and huts are small
     low-poly 3D shapes with their painted picture draped over them from above (shapes3d.py).
   * Everything else that stands up (survivors, zombies, animals, bosses, lanterns, gates...) is a
-    "cut-out" - the same painted picture, stood upright and turned to face the camera. In first
-    person, animals, bosses, survivors and zombies become simple 3D bodies instead.
+    "cut-out" - the same painted picture, stood upright and turned to face the camera. Animals, bosses,
+    survivors and zombies are real low-poly 3D models (models3d.py, built in Blender - docs/MODELS.md).
   * Walls (cave walls and the walls you build) are real 3D blocks.
 
 Two small custom shaders do the work, fed by the same arcade SpriteLists the 2D game already uses,
@@ -26,6 +26,7 @@ from pyglet import gl
 from pyglet.math import Mat4, Vec3
 
 import fx3d
+import models3d
 import shapes3d
 import ui
 from settings import *
@@ -204,7 +205,7 @@ void main() { f_color = v_col; }
 
 
 # =========================================================================== the mixin
-class View3D(fx3d.FX3D):
+class View3D(fx3d.FX3D, models3d.CreatureModels):
     """Mixed into the game window. Replaces the flat camera with a tilted 3D one."""
 
     # ------------------------------------------------------------------ camera maths
@@ -543,7 +544,9 @@ class View3D(fx3d.FX3D):
         self.draw_kinds(L.rocks)
         self.draw_kinds(L.builds, getattr(self, "struct_ver", 0), MESH_BUILDS)
         self.stand(L.flames, lift=2, nudge=2, cut=0.05)
-        if fp:          # from eye level the painted-from-above creatures need real bodies
+        if self.models3d_mode(fp):      # models3d.py: real low-poly 3D creatures (Blender-built models)
+            self.models3d_creatures(L, fp)
+        elif fp:        # from eye level the painted-from-above creatures need real bodies
             self.mesh(L.animals, "body")
             self.mesh(self.cloak_list, "person", inflate=1.08)
             self.mesh(self.player_list, "person")
@@ -613,7 +616,9 @@ class View3D(fx3d.FX3D):
             self.stand(L.flames, lift=2, nudge=2, cut=0.05)
             for e in L.eyes:
                 e.alpha = int(255 * dk)
-            if fp:      # on the zombie's 3D head, just in front of its face
+            if self.models3d_mode(fp):  # glows sit on the models' eyes / cores
+                self.models3d_glows(dk)
+            elif fp:    # on the zombie's 3D head, just in front of its face
                 self.stand(L.eyes, lift=40, nudge=16, cut=0.0, blend=blend)
             else:
                 self.stand(L.eyes, lift=16, nudge=3, cut=0.0, blend=blend)
