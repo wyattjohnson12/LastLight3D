@@ -141,8 +141,8 @@ TYPES = [
     PlaceType("grave", "a survivor's grave", "graves", "A note in the dead survivor's hand",
               where=[("forest", 2), ("meadow", 1), ("tundra", 1), ("highlands", 1), ("ash", 1), ("mire", 1)],
               radius=64, min_dist=360,
-              props=[Prop("ex_mound", 0, 0, solid=(52, 30)), Prop("ex_cross", -40, 0, solid=(8, 8)),
-                     Prop("rock", -30, 30, tex="rock:2")],
+              props=[Prop("ex_mound", 0, 0, solid=(62, 34), size=80), Prop("ex_cross", -48, 0, solid=(10, 10), size=24),
+                     Prop("rock", -36, 36, tex="rock:2", size=34)],
               box=("ex_pack", "ex_pack_open", 26, -32), patch="mud", patch_size=140, box_name="backpack",
               loot=[("berries", 2, 4, 2), ("bandage", 1, 2, 3), ("fiber", 2, 5, 2), ("torch", 1, 1, 1),
                     ("water", 1, 1, 2)],
@@ -697,8 +697,8 @@ def draw_locked_recipe(game, gi, rec, rect, hover):
     """ui.py's crafting list: an unknown recipe as a dark silhouette. Returns the hover text."""
     rl, rr, rb, rt = rect
     arcade.draw_lrbt_rectangle_filled(rl, rr, rb, rt, (48, 40, 56, 210) if hover else (28, 30, 38, 210))
-    arcade.draw_texture_rect(art.icon(rec["item"]), arcade.XYWH(rl + 20, (rb + rt) / 2, 28, 28), color=(0, 0, 0),
-                             alpha=200)
+    arcade.draw_texture_rect(art.icon(rec["item"]), arcade.XYWH(rl + 20, (rb + rt) / 2, 28, 28),
+                             color=arcade.color.BLACK, alpha=200)
     game.txt(f"rn{gi}", "???", rl + 42, rb + 10, (170, 150, 200), 12, bold=True)
     game.txt(f"rc{gi}", f"find it out in the world - look in {where_hint(game, rec['item'])}", rr - 10, rb + 10,
              (160, 140, 190), 10, anchor_x="right")

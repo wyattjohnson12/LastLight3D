@@ -107,6 +107,37 @@ different arrangement on every map, lie the **Frostwood Tundra**, the **Stone Hi
 For modders and contributors: `docs/BIOMES.md` explains how biomes, terrain and extra underground layers
 plug in (`biomes.py`).
 
+## Exploring: places to discover
+
+There are no quests and no map markers - but the wilds are full of small **abandoned places** (about 30 on
+every new map, a different layout each time). Fewer lie near the spawn; the richest are far out and in the
+harsh biomes.
+
+| Place | Where | What's there |
+|---|---|---|
+| Abandoned camp | Forest, Riverlands, Tundra, Mire | torn tent, cold firepit, a chest |
+| Ruined watchtower | Riverlands, Highlands, Forest | a broken stone tower you can see from afar - zombies hide inside |
+| Trapper's hut | Forest, Tundra, Mire | log cabin, drying rack - its wolves come back when you open the chest |
+| Miner's camp | Highlands, Ashlands, **and in the cave** | headframe, mine cart, ore - a golem guards the cave ones |
+| Survivor's grave | everywhere | a mound, a cross and a backpack (sometimes the grave isn't empty...) |
+| Ice-locked cache | Tundra | a frozen chest among ice spikes |
+| Obsidian shrine | Ashlands | glowing obelisks and an urn on an ember altar |
+| Sunken boat | the Mire | a half-sunk boat by a bog pool |
+
+* Walk close and you **find** it ("You found an abandoned camp"). Press **E** (controller **B**) at its chest
+  to **search** it once: materials, food, sometimes a rare tool, armor piece or crystal. In co-op the world is
+  shared - what one of you takes is gone for everyone.
+* **Recipes to find:** the Iron Pickaxe, Iron Sword, Iron Helmet, Iron Armor, Hunting Bow, Bear Trap, Arrow
+  Turret, Iron Wall, Iron Brazier and Crystal Medkit are **unknown** in a new game. Notes, manuals and
+  blueprints in the places teach them - every one of them is hidden in at least two places on every map. The
+  crafting list shows unknown ones as **???** with a hint where to look ("look in miners' camps and graves").
+  What one survivor learns, the whole team knows. (You need the Iron Pickaxe to break into the Crystal Hollows.)
+* By day, the zombies hiding in a ruin stay in the shade for a while after you wake them - it's a fight.
+* The pause screen counts **places found** and **recipes found**. Saves remember what was searched and learned.
+  Games saved before this update (and the old small map) already know every recipe.
+* For contributors: `explore.py` (how to add a new kind of place is at the top of the file), art in
+  `art_explore.py`, tests in `test_explore.py`.
+
 ## Hills
 
 The big map isn't flat any more: the ground rolls in gentle hills through the Forest and the Riverlands,

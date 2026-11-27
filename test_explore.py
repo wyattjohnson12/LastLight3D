@@ -160,7 +160,31 @@ def main_test():
     me.alive = True
     g.set_layer(me, "over", (g.structs[max(g.structs)].position[0] - 60, g.structs[max(g.structs)].position[1]))
     assert g.can_craft(me, rec), "a learned recipe can be crafted"
-    print("3. searching gives loot once, teaches the recipe, unknown recipes can't be crafted")
+    g.ui_open = "inv"                        # the crafting list draws unknown recipes as silhouettes
+    for tab in range(len(main.CRAFT_TABS)):
+        g.craft_tab = tab
+        g.on_draw()
+    g.ui_open = None
+    # a guarded place, opened by day: its zombies hide from the sun for a while
+    g.clock = 0.25 * main.DAY_CYCLE_SECONDS
+    tw = next(p for p in st.places if p.type.key == "tower" and not p.opened)
+    g.set_layer(me, "over", (tw.box.center_x + 40, tw.box.center_y))
+    me.alive, me.health = True, 100
+    zs = set(g.zmap)
+    g.interact(me)
+    guards = [z for z in g.over.zombies if getattr(z, "shade_t", 0) > 0]
+    assert tw.opened and guards, "a watchtower's guards wake up"
+    hp = [z.hp for z in guards]
+    g.set_layer(me, "over", (tw.x + 900, tw.y))
+    for _ in range(30):
+        g.on_update(1 / 30)
+    assert [z.hp for z in guards] == hp, "guards in the shade don't burn in the sun"
+    for z in guards:
+        z.shade_t = 0
+    for _ in range(90):
+        g.on_update(1 / 30)
+    assert all(z.hp < h for z, h in zip(guards, hp)), "...until the shade wears off"
+    print("3. searching gives loot once, teaches the recipe, unknown recipes can't be crafted, guards wake")
 
     # ---- 4. saves
     data = json.loads(json.dumps(g.save_data()))

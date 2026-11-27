@@ -1150,7 +1150,7 @@ class UI:
             ("Right-click  |  LT", "build / eat / tame (hold the animal's food)"),
             ("1-8, wheel  |  LB / RB", "choose hotbar item"),
             ("TAB  |  Y", "backpack, crafting & armor"),
-            ("E  |  B", "open storage, use cave entrance, drink"),
+            ("E  |  B", "open storage, search a place, use cave entrance, drink"),
             ("Q  |  B", "quick eat / drink"), ("P  |  D-pad up", "Pets menu: names, orders, pet armor"),
             ("F  |  D-pad down", "quick order for all pets: follow / work / stay"),
             ("SHIFT  |  hold X", "rest (heals in a hut or by a fire)"),
