@@ -27,6 +27,7 @@ from pyglet.math import Mat4, Vec3
 
 import fx3d
 import shapes3d
+import terrain3d
 import ui
 from settings import *
 
@@ -72,7 +73,6 @@ void main() {
     vec3 c = gl_in[0].gl_Position.xyz;
     bool box = c.z < 0.0;
     if ((boxes_only == 1) != box) return;
-    float z = box ? height : height + c.z;
     vec2 hs = v_size[0] / 2.0;
     float a = radians(v_angle[0]);
     mat2 rot = mat2(cos(a), -sin(a), sin(a), cos(a));
@@ -80,10 +80,15 @@ void main() {
     vec2 uv0, uv1, uv2, uv3;
     uvs(uv0, uv1, uv2, uv3);
     gs_color = v_color[0];
-    gl_Position = mvp * vec4(rot * vec2(-hs.x, hs.y) + c.xy, z, 1.0);  gs_uv = uv0; EmitVertex();
-    gl_Position = mvp * vec4(rot * vec2(-hs.x, -hs.y) + c.xy, z, 1.0); gs_uv = uv2; EmitVertex();
-    gl_Position = mvp * vec4(rot * vec2(hs.x, hs.y) + c.xy, z, 1.0);   gs_uv = uv1; EmitVertex();
-    gl_Position = mvp * vec4(rot * vec2(hs.x, -hs.y) + c.xy, z, 1.0);  gs_uv = uv3; EmitVertex();
+    // HILLS (terrain3d.py): a block's top sits level on the ground under its centre; anything lying on the
+    // ground takes the ground height at each corner (+ a hair, so it isn't hidden in the ground mesh)
+    float zc = box ? height + ground_z(c.xy) : height + c.z + (hill_on == 1 ? 1.5 : 0.0);
+    vec2 p0 = rot * vec2(-hs.x, hs.y) + c.xy, p1 = rot * vec2(-hs.x, -hs.y) + c.xy;
+    vec2 p2 = rot * vec2(hs.x, hs.y) + c.xy, p3 = rot * vec2(hs.x, -hs.y) + c.xy;
+    gl_Position = mvp * vec4(p0, box ? zc : zc + ground_z(p0), 1.0); gs_uv = uv0; EmitVertex();
+    gl_Position = mvp * vec4(p1, box ? zc : zc + ground_z(p1), 1.0); gs_uv = uv2; EmitVertex();
+    gl_Position = mvp * vec4(p2, box ? zc : zc + ground_z(p2), 1.0); gs_uv = uv1; EmitVertex();
+    gl_Position = mvp * vec4(p3, box ? zc : zc + ground_z(p3), 1.0); gs_uv = uv3; EmitVertex();
     EndPrimitive();
 }
 """
@@ -120,10 +125,13 @@ void main() {
         vec2 side = vec2(-dir.y, dir.x) * rx * 0.95;
         vec2 along = dir * rx * (0.5 + 0.6 * ln);
         vec2 ctr = c.xy + dir * (rx * 0.5 + extra * 0.6) * ln;
-        gl_Position = mvp * vec4(ctr - along + side, 0.3, 1.0); gs_uv = vec2(-1.0, 1.0);  EmitVertex();
-        gl_Position = mvp * vec4(ctr - along - side, 0.3, 1.0); gs_uv = vec2(-1.0, -1.0); EmitVertex();
-        gl_Position = mvp * vec4(ctr + along + side, 0.3, 1.0); gs_uv = vec2(1.0, 1.0);   EmitVertex();
-        gl_Position = mvp * vec4(ctr + along - side, 0.3, 1.0); gs_uv = vec2(1.0, -1.0);  EmitVertex();
+        mat4 vp = window.projection * window.view;        // HILLS: each corner on the ground under it
+        float zs = hill_on == 1 ? 1.8 : 0.3;
+        vec2 s0 = ctr - along + side, s1 = ctr - along - side, s2 = ctr + along + side, s3 = ctr + along - side;
+        gl_Position = vp * vec4(s0, zs + ground_z(s0), 1.0); gs_uv = vec2(-1.0, 1.0);  EmitVertex();
+        gl_Position = vp * vec4(s1, zs + ground_z(s1), 1.0); gs_uv = vec2(-1.0, -1.0); EmitVertex();
+        gl_Position = vp * vec4(s2, zs + ground_z(s2), 1.0); gs_uv = vec2(1.0, 1.0);   EmitVertex();
+        gl_Position = vp * vec4(s3, zs + ground_z(s3), 1.0); gs_uv = vec2(1.0, -1.0);  EmitVertex();
         EndPrimitive();
         return;
     }
@@ -204,7 +212,7 @@ void main() { f_color = v_col; }
 
 
 # =========================================================================== the mixin
-class View3D(fx3d.FX3D):
+class View3D(terrain3d.Terrain3D, fx3d.FX3D):
     """Mixed into the game window. Replaces the flat camera with a tilted 3D one."""
 
     # ------------------------------------------------------------------ camera maths
@@ -226,13 +234,13 @@ class View3D(fx3d.FX3D):
         d = (vh / 2) / TAN
         fx, fy = self.camera.position
         cp, sp = math.cos(PITCH), math.sin(PITCH)
-        eye = (fx, fy - d * cp, d * sp)
+        eye = (fx, fy - d * cp, d * sp + self.ground_z(fx, fy))     # HILLS: the camera rides up with you
         return eye, (0.0, cp, -sp), (1.0, 0.0, 0.0), (0.0, sp, cp), d, vw, vh
 
     def project(self, x, y, z=0.0):
         """World point -> screen position in GUI coordinates (None if it's behind the camera)."""
         (ex, ey, ez), f, r, u, d, vw, vh = self._basis()
-        rx, ry, rz = x - ex, y - ey, z - ez
+        rx, ry, rz = x - ex, y - ey, z + self.ground_z(x, y) - ez      # HILLS: z is above the ground there
         zc = rx * f[0] + ry * f[1] + rz * f[2]           # distance in front of the camera
         if zc < 1:
             return None
@@ -245,14 +253,41 @@ class View3D(fx3d.FX3D):
         return self.project(x, y, px * UP)
 
     def ground_at(self, sx, sy):
-        """Screen position (GUI coordinates) -> the point on the ground under it."""
+        """Screen position (GUI coordinates) -> the point on the ground under it (the hills too)."""
         (ex, ey, ez), f, r, up, d, vw, vh = self._basis()
         u, v = (sx - vw / 2) / d, (sy - vh / 2) / d
         dx, dy, dz = (f[i] + r[i] * u + up[i] * v for i in range(3))
         if dz > -1e-3:
             dz = -1e-3
         t = -ez / dz
-        return ex + dx * t, ey + dy * t
+        g = self.hill_grid()
+        if g is None:
+            return ex + dx * t, ey + dy * t
+        return self._ray_hills(g, ex, ey, ez, dx, dy, dz, t)
+
+    @staticmethod
+    def _ray_hills(g, ex, ey, ez, dx, dy, dz, t_flat):
+        """HILLS: march the view ray over the height grid to where it first goes under the ground."""
+        t0 = max(0.0, (g.hmax - ez) / dz)           # where the ray comes down to the highest hill
+        if t0 >= t_flat:
+            return ex + dx * t_flat, ey + dy * t_flat
+        step = 24.0 / max(1e-3, math.hypot(dx, dy))   # ~24 px along the ground per step
+        t_end = min(t_flat, t0 + 6000.0 * step / 24.0)
+        prev = t0
+        t = t0
+        while t < t_end:
+            t = min(t_end, t + step)
+            if ez + dz * t <= g.at(ex + dx * t, ey + dy * t):
+                lo, hi = prev, t
+                for _ in range(10):
+                    mid = (lo + hi) / 2
+                    if ez + dz * mid <= g.at(ex + dx * mid, ey + dy * mid):
+                        hi = mid
+                    else:
+                        lo = mid
+                return ex + dx * hi, ey + dy * hi
+            prev = t
+        return ex + dx * t_end, ey + dy * t_end
 
     def mouse_ground(self):
         mx, my = self.to_window(*self.mouse_screen)     # game layout -> real window (fullscreen scaling)
@@ -270,6 +305,43 @@ class View3D(fx3d.FX3D):
         else:
             self.projection = Mat4.perspective_projection(vw / vh, 20.0, 8000.0, FOV)
         self.view = Mat4.look_at(Vec3(ex, ey, ez), Vec3(ex + f[0], ey + f[1], ez + f[2]), Vec3(0.0, 0.0, 1.0))
+        self._view3d = self.view
+
+    def lift_to_ground(self, x=None, y=None):
+        """HILLS: plain arcade shapes drawn in the 3D camera lie at z = 0. Lift the camera so the next ones
+        lie on the ground at (x, y); call with no arguments to put it back."""
+        base = getattr(self, "_view3d", None)
+        if base is None:
+            return
+        z = self.ground_z(x, y) if x is not None else 0.0
+        self.view = base @ Mat4.from_translation(Vec3(0.0, 0.0, z)) if z else base
+
+    def ground_ring(self, x, y, r, col, width=2):
+        """A circle outline lying on the ground (it follows the hills). Call with the 3D camera on."""
+        if self.hill_grid() is None:
+            arcade.draw_circle_outline(x, y, r, col, width)
+            return
+        n = max(24, min(96, int(r / 7)))
+        strips, cur = [], []
+        for i in range(n + 1):
+            a = i / n * math.tau
+            s = self.project(x + math.cos(a) * r, y + math.sin(a) * r, 1.5)
+            if s is None:
+                if len(cur) > 1:
+                    strips.append(cur)
+                cur = []
+            else:
+                cur.append(s)
+        if len(cur) > 1:
+            strips.append(cur)
+        depth = self.ctx.DEPTH_TEST in self.ctx.flags
+        self.ctx.disable(self.ctx.DEPTH_TEST)
+        self.gui.use()
+        for pts in strips:
+            arcade.draw_line_strip(pts, col, width)
+        self.use_world3d()
+        if depth:
+            self.ctx.enable(self.ctx.DEPTH_TEST)
 
     # ------------------------------------------------------------------ GPU bits
     def _init3d(self):
@@ -278,8 +350,10 @@ class View3D(fx3d.FX3D):
         lib = open(arcade.resources.resolve(":system:shaders/lib/sprite.glsl")).read()
         vs = open(arcade.resources.resolve(":system:shaders/sprites/sprite_list_geometry_vs.glsl")).read()
         ctx = self.ctx
-        flat = ctx.program(vertex_shader=vs, geometry_shader=FLAT_GEO.replace("%LIB%", lib), fragment_shader=SPRITE_FS)
-        bill = ctx.program(vertex_shader=vs, geometry_shader=BILL_GEO.replace("%LIB%", lib), fragment_shader=SPRITE_FS)
+        hlib = lib + terrain3d.GLSL          # HILLS: ground_z() in every world shader (terrain3d.py)
+        flat = ctx.program(vertex_shader=vs, geometry_shader=FLAT_GEO.replace("%LIB%", hlib), fragment_shader=SPRITE_FS)
+        bill = ctx.program(vertex_shader=vs, geometry_shader=terrain3d.inject(BILL_GEO.replace("%LIB%", hlib), "0.0"),
+                           fragment_shader=SPRITE_FS)
         for p in (flat, bill):
             p["sprite_texture"] = 0
             p["uv_texture"] = 1
@@ -295,8 +369,10 @@ class View3D(fx3d.FX3D):
         bill["face_right"] = (1.0, 0.0)
         bill["shade"] = 1.0
         self._progs3d = (flat, bill, ctx.program(vertex_shader=BOX_VS, fragment_shader=BOX_FS))
-        geo, frag = shapes3d.program_sources(lib)
-        mesh = self._mesh3d = ctx.program(vertex_shader=vs, geometry_shader=geo, fragment_shader=frag)
+        geo, frag = shapes3d.program_sources(hlib)
+        mesh = self._mesh3d = ctx.program(vertex_shader=vs, geometry_shader=terrain3d.inject(geo, "R * 0.5"),
+                                          fragment_shader=frag)
+        self._hill_init(vs, hlib, SPRITE_FS)
         mesh["sprite_texture"] = 0
         mesh["uv_texture"] = 1
         mesh["inflate"] = 1.0
