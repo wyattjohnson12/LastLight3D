@@ -120,8 +120,13 @@ def main_test():
     try:
         g.setup(seed)
         after = rows(g)
-        assert after[:len(before)] == before, "adding a module changed earlier nodes"
-        assert "zz_test" in g.node_spans and all(g.node_spans[k] == v for k, v in spans.items())
+        # every other module's nodes are exactly the same (later modules' indices just move up - saves remap them)
+        for k, (s0, c0) in spans.items():
+            s1, c1 = g.node_spans[k]
+            assert c1 == c0 and [r[1:] for r in after[s1:s1 + c1]] == [r[1:] for r in before[s0:s0 + c0]], \
+                f"adding a module changed {k}'s nodes"
+        assert "zz_test" in g.node_spans and all(g.node_spans[k] == v for k, v in spans.items()
+                                                 if biomes.get(k).order <= 25 or k in ("base", "mire"))
     finally:
         biomes.BIOMES.pop("zz_test")
         biomes._cache.clear()

@@ -78,6 +78,7 @@ aren't 30.
 | `speed` | `(game, p) -> multiplier` while p stands in this biome | the computer moving p | `main.move_player` |
 | `fog` | `(r, g, b, a)` screen haze while the viewer is here (blended) | every computer | `weather.draw_weather_3d` |
 | `ambient` | `(game, dt, x, y)` particles / sounds where the viewer is | every computer | `main.on_update` |
+| `draw3d` | `(game, L, vl)` draw your own SpriteLists in 3D (`game.mesh(lst, shape)`), after the trees, depth tested | every computer | `view3d.draw_world_3d` |
 | `height` | `(game, x, y) -> px` (summed over modules) | every computer | `game.ground_height` |
 | `blocked` | `(game, x, y, layer) -> bool` nobody walks here | every computer | `main.move_player`, `base.spot_ok`, `gen.free` |
 | `water` | `(game, x, y, layer) -> bool` | every computer | `base.spot_ok`, `gen.free` (wire drinking in yourself) |

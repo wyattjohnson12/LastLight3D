@@ -122,6 +122,23 @@ spore pods that burst into poison gas (purple circles), roots that burst up unde
 (brown circles), and it sinks into the mud and erupts under someone (bubbling patch). It **heals while it's
 in the swamp**, so lure it out onto dry ground. The code lives in `swamp.py` (and the art in `art_swamp.py`).
 
+## The Stone Highlands
+
+A rocky upland wedge of the big map (new worlds only), home of the Quake Titan. Scree and gravel underfoot,
+heather and wiry grass, a cold wind (a little extra chill, worse at night) and only a few **wind-bent pines**,
+all leaning the same way. Lots of stone: **boulder fields** (big boulders give plenty of stone - bring a
+pickaxe), extra rocks and iron.
+
+* **Plateaus** - raised tablelands ringed by rocky cliff ledges you can't climb. Walk up the **ramps**.
+* **The Titan's Crown** - a ring of rune-carved standing stones in the middle of the highlands.
+* **Mountain goats** - they butt back when you hit them. Drop meat, **Goat Wool** and **Goat Horn**.
+  Tame one with **Heather** and it works as a hauler.
+* **Heather** - low purple shrubs to gather. **Heather Tea** (campfire: +30 thirst, +30 energy, +10 health),
+  **Highland Wool Cloak** (workbench: warmth 10, armor 1), **Horn Bow** (workbench: 7.5 damage, longer range).
+* **Quakes** - every couple of minutes you spend up here the ground trembles. Then boulders break loose:
+  some **roll** down at you (sidestep them!), some drop out of the sky on the red circles. Rolling boulders
+  that come to rest stay there as new boulders to mine.
+
 ## Pets
 
 Tame an animal by holding its favourite food and right-clicking it (wolf: meat, boar & rabbit: berries,

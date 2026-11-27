@@ -602,6 +602,7 @@ class View3D(fx3d.FX3D, models3d.CreatureModels):
             hsp.alpha = 110 if inside else 255
         self.mesh(L.huts, "hut")
         self.draw_kinds(L.trees, getattr(self, "nodes_ver", 0))
+        self.biome_draw3d(L, vl)     # biomes.py: plug-ins' own 3D props (highland ledges, rolling boulders...)
         if fp:
             self.fp_hide_me(False)
 
