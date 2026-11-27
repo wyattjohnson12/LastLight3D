@@ -1,0 +1,22 @@
+{
+  "version": "2.0.0",
+  "date": "2026-11-27",
+  "name": "Lairs & Lost Places",
+  "notes": [
+    "Bosses now sleep in lairs out in the world - wake them at the altar when YOU are ready",
+    "About 30 places to discover: camps, ruins, huts, graves, shrines, sunken boats... with loot",
+    "Some recipes (iron gear, bow, turret...) are learned by finding them in those places",
+    "Die and your backpack stays where you fell - get it back before it's gone",
+    "Hunger and thirst last longer; walking is free, SHIFT to sprint",
+    "New 3D look: fire light on walls, sun shadows, glow, fog, moving water",
+    "Screen & graphics menu: smooth edges, glow effects, sun shadows"
+  ],
+  "history": [
+    {
+      "version": "1.0.0",
+      "date": "2026-11-27",
+      "name": "Riverlands",
+      "notes": ["Rivers, bridges, cliffs, roads, fishing, farming, real hills and the Stone Highlands"]
+    }
+  ]
+}
