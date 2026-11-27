@@ -389,3 +389,6 @@ TREE_COUNT, ROCK_COUNT, BUSH_COUNT, POND_COUNT, IRON_COUNT = 230, 120, 95, 9, 18
 CAVE_ROCKS, CAVE_IRON, CAVE_COAL, CAVE_CRYSTAL = 40, 34, 30, 16
 TREE_HP, ROCK_HP = 6, 6
 TREE_REGROW, ROCK_REGROW, BERRY_REGROW = 90, 120, 45
+
+# node kinds you can walk over / through (not solid for anyone)
+WALKABLE_NODES = {"rock", "bush", "reeds", "river_reeds", "clay", "glowcap", "tall_grass", "heather"}

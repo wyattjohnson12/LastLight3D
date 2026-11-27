@@ -214,6 +214,9 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         self.node_spans["mire"] = [self.node_spans["base"][1], len(self.nodes) - self.node_spans["base"][1]]
         self.portals = [("over", tuple(a), "cave", tuple(b)) for a, b in self.links]
         biomes.generate(self)      # biomes.py: every plug-in's content, in a fixed order, own random streams
+        for L in self.layers.values():     # rocks, bushes, reeds, clay...: walk over / through them
+            for n in [s for s in L.solid if getattr(s, "kind", None) in WALKABLE_NODES]:
+                L.solid.remove(n)
         self.animal_cap = int(ANIMAL_CAP * min(2.0, biomes.area_scale(self.worldgen)))
         self.centre = (self.world_size / 2, self.world_size / 2)
         self.player_list = arcade.SpriteList()
@@ -905,7 +908,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             n.visible = state != "gone"
             if state == "gone" and L.solid in n.sprite_lists:
                 L.solid.remove(n)
-            elif state != "gone" and L.solid not in n.sprite_lists:
+            elif state != "gone" and L.solid not in n.sprite_lists and n.kind not in WALKABLE_NODES:
                 L.solid.append(n)
         self.nodes_ver += 1
 
