@@ -8,6 +8,10 @@ import arcade
 
 import art
 import art_extra  # noqa: F401  (registers the new icons)
+import biomes
+import explore
+import updates
+import lairs
 import savegame
 from settings import *
 
@@ -59,14 +63,14 @@ class UI:
         pos = self.view_pos()
         torch = me is not None and me.alive and me.holding_torch
         fire = self.near_fire(pos, vl, 150)
-        if vl == "cave":
+        if vl != "over":
             return 280 if fire else 260 if torch else 150
         return 300 if fire else 330 if torch else 240
 
     def on_draw(self):
         vl = self.view_layer
         L = self.layers[vl]
-        bg = (6, 6, 9) if vl == "cave" else (24, 34, 22)
+        bg = (6, 6, 9) if vl != "over" else (24, 34, 22)
         if getattr(self, "_split", False):     # local split screen: only paint this player's slice
             self.gui.use()
             arcade.draw_lrbt_rectangle_filled(0, W, 0, H, bg)
@@ -93,6 +97,7 @@ class UI:
             return
         self.draw_offscreen_friends()
         self.draw_hud()
+        self.draw_pack_pointer()      # backpack.py: the arrow to your dropped pack (on top of the HUD)
         self.draw_boss_bar()
         if not getattr(self, "_split", False):   # split screen draws these full-size afterwards
             if self.ui_open == "inv":
@@ -110,7 +115,10 @@ class UI:
         if self.view_layer != "over":
             return
         pulse = 0.5 + 0.5 * math.sin(self.flame_t * 14)
+        self.draw_swamp_ground()      # swamp.py draws its own hazards
         for h in self.hazards:
+            if h.kind in self.SWAMP_HAZARDS:
+                continue
             if h.tele > 0:
                 if h.kind == "line":
                     ex, ey = h.x + math.cos(h.a) * h.ln, h.y + math.sin(h.a) * h.ln
@@ -249,16 +257,11 @@ class UI:
                                           H - 82, H - 78, (30, 36, 70))
         arcade.draw_lrbt_rectangle_filled(W - 221 + bar_w * p, W - 219 + bar_w * p, H - 85, H - 75, (255, 230, 150))
         y = H - 106
-        if self.boss_night:
-            label = "BOSS RETURNS TONIGHT" if self.boss_hp is not None else "BOSS NIGHT"
-            self.txt("bossnight", label, W - 18, y, (255, 110, 90), 11, anchor_x="right", bold=True)
-            y -= 16
-        else:
-            n = self.boss_day - self.day
-            self.txt("bossnext", f"Next boss in {n} night{'s' if n > 1 else ''}", W - 18, y, (200, 170, 160), 10,
-                     anchor_x="right")
-            y -= 16
-        if self.view_layer == "cave":
+        label, col, loud = lairs.hud_line(self)      # lairs.py: "Bosses asleep: 5 - one stirs in 9 nights"
+        self.txt("bossnext", label, W - 18, y, col, 11 if loud else 10, anchor_x="right", bold=loud)
+        y -= 16
+        y = self.draw_weather_hud(y)     # weather.py: season + weather
+        if self.view_layer != "over":
             self.txt("cavetag", "UNDERGROUND", W - 18, y, (190, 170, 255), 11, anchor_x="right", bold=True)
             y -= 16
         if self.net:
@@ -347,12 +350,24 @@ class UI:
         use, inter = ("LT", "B") if pad else ("Right-click", "E")
         if self.near_storage(me):
             return f"{inter}  open TEAM STORAGE  (crafting nearby uses it automatically)"
+        found = explore.hint(self, me, inter)      # explore.py: a place's chest at hand
+        if found:
+            return found
         ex = self.near_exit(me)
         if ex:
-            return f"{inter}  climb {'down into the cave' if me.layer == 'over' else 'back up to the surface'}"
+            far = self.portal_from(me.layer, ex.position)      # biomes.py: any layer (cave, deep...)
+            lock = self.portal_lock(me.layer, ex.position)
+            if lock:
+                return lock
+            to = far[0] if far else "over"
+            down = biomes.depth(to) > biomes.depth(me.layer)
+            return f"{inter}  climb {'down ' if down else 'back up '}{self.layer_title(to)}"
         shrine = self.shrine_hint(me, inter)          # spells.py
         if shrine:
             return shrine
+        lair = lairs.hint(self, me, inter)      # lairs.py: next to a boss's altar
+        if lair:
+            return lair
         if self.near_pond(me):
             return f"{inter}  drink & fill flask"
         t = self.tame_target()
@@ -377,10 +392,10 @@ class UI:
         if self.near_kind(me.pos, me.layer, "workbench", 150):
             return "Workbench here: open the backpack for advanced crafting"
         if self.near_fire(me.pos, me.layer, 150):
-            return f"By the fire: warm up, cook food   |   {'hold X' if pad else 'SHIFT'} rest to heal"
+            return f"By the fire: warm up, cook food   |   {'hold X' if pad else 'SHIFT (standing)'} rest to heal"
         if pad:
-            return "RT/A hit & gather   L-stick move   R-stick aim   LB/RB hotbar   hold X rest"
-        return "Left-click  hit / gather     WASD  move     SHIFT  rest"
+            return "RT/A hit & gather   L-stick move (click: sprint)   R-stick aim   LB/RB hotbar   hold X rest"
+        return "Left-click  hit / gather     WASD  move     SHIFT  sprint (standing: rest)"
 
     # ------------------------------------------------------------------ backpack & crafting
     INV_COLS, INV_ROWS, SLOT, GAP = 5, 5, 62, 8
@@ -399,11 +414,55 @@ class UI:
         order = list(ITEMS)
         return sorted(self.me.inv.items(), key=lambda kv: order.index(kv[0]))
 
-    def inv_slots(self):
+    # --- item grids that scroll a row at a time (the backpack has no size limit, so it can be long)
+    def grid_first(self, key, total, cols, rows):
+        """First visible row of a scrolling grid (clamped)."""
+        if not hasattr(self, "_grid_scroll"):
+            self._grid_scroll = {}
+        most = max(0, -(-total // cols) - rows)
+        v = max(0, min(most, self._grid_scroll.get(key, 0)))
+        self._grid_scroll[key] = v
+        return v
+
+    def grid_scroll(self, key, steps, total, cols, rows):
+        self.grid_first(key, total, cols, rows)
+        self._grid_scroll[key] += steps
+        self.grid_first(key, total, cols, rows)
+
+    def draw_grid_bar(self, key, x, top, total, cols, rows, tag):
+        """Scrollbar beside a grid with more items than fit, plus 'N more above / below' notes."""
+        total_rows = -(-total // cols)
+        if total_rows <= rows:
+            return
+        first = self.grid_first(key, total, cols, rows)
+        pitch = self.SLOT + self.GAP
+        bot = top - rows * pitch
+        span = top - bot
+        th = max(20, span * rows / total_rows)
+        t0 = top - (span - th) * first / (total_rows - rows)
+        arcade.draw_lrbt_rectangle_filled(x, x + 7, bot, top, (34, 40, 48, 220))
+        arcade.draw_lrbt_rectangle_filled(x, x + 7, t0 - th, t0, (255, 214, 140, 210))
+        above = first * cols
+        below = max(0, total - (first + rows) * cols)
+        how = "right stick" if self.use_pad else "mouse wheel"
+        self.txt(f"gm{tag}a", f"{above} more above" if above else "", x + 7, top + 3, (255, 214, 140), 10,
+                 anchor_x="right")
+        self.txt(f"gm{tag}b", f"{below} more below - scroll ({how})" if below else "", x + 7, bot - 12,
+                 (255, 214, 140), 10, anchor_x="right")
+
+    def inv_grid_top(self):
         l, b, pw, ph = self.inv_layout()
-        top = b + ph - 56
-        items = self.inv_items()[:self.INV_COLS * self.INV_ROWS]
-        return [(it, self.grid_rect(l + 24, top, i, self.INV_COLS)) for i, (it, _) in enumerate(items)]
+        return b + ph - 56
+
+    def inv_slots(self):
+        """The backpack items you can see right now: [(item, rect), ...] (scrolled)."""
+        l, b, pw, ph = self.inv_layout()
+        top = self.inv_grid_top()
+        items = self.inv_items()
+        cols, rows = self.INV_COLS, self.INV_ROWS
+        first = self.grid_first("inv", len(items), cols, rows) * cols
+        shown = items[first:first + cols * rows]
+        return [(it, self.grid_rect(l + 24, top, i, cols)) for i, (it, _) in enumerate(shown)]
 
     def worn_slots(self):
         l, b, pw, ph = self.inv_layout()
@@ -415,15 +474,89 @@ class UI:
         x0 = l + 410
         return [(i, (x0 + i * 136, x0 + i * 136 + 130, b + ph - 82, b + ph - 54)) for i in range(len(TAB_NAMES))]
 
+    CRAFT_ROWS, ROW_PITCH = 12, 36      # recipes shown at once; a longer tab scrolls
+
+    def craft_scroll(self, tab=None):
+        """How many recipes of this tab are scrolled off the top (each tab remembers its own)."""
+        tab = self.craft_tab if tab is None else tab
+        if not hasattr(self, "_craft_scroll"):
+            self._craft_scroll = {}
+        most = max(0, len(CRAFT_TABS[TAB_NAMES[tab]]) - self.CRAFT_ROWS)
+        return max(0, min(most, self._craft_scroll.get(tab, 0)))
+
+    def scroll_crafting(self, steps):
+        if not hasattr(self, "_craft_scroll"):
+            self._craft_scroll = {}
+        self._craft_scroll[self.craft_tab] = self.craft_scroll() + steps
+        self._craft_scroll[self.craft_tab] = self.craft_scroll()     # clamp
+
     def recipe_rows(self):
+        """The recipes you can see right now: [(index into RECIPES, recipe, rect), ...]."""
         l, b, pw, ph = self.inv_layout()
         name = TAB_NAMES[self.craft_tab]
         x = l + 410
+        first = self.craft_scroll()
         rows = []
-        for i, rec in enumerate(CRAFT_TABS[name]):
-            y = b + ph - 112 - i * 36
-            rows.append((TAB_OFFSET[name] + i, rec, (x, x + 548, y - 16, y + 16)))
+        for i, rec in enumerate(CRAFT_TABS[name][first:first + self.CRAFT_ROWS]):
+            y = b + ph - 112 - i * self.ROW_PITCH
+            rows.append((TAB_OFFSET[name] + first + i, rec, (x, x + 548, y - 16, y + 16)))
         return rows
+
+    def craft_scrollbar(self):
+        """(track rect, thumb rect) for a tab with more recipes than fit, else None."""
+        n = len(CRAFT_TABS[TAB_NAMES[self.craft_tab]])
+        if n <= self.CRAFT_ROWS:
+            return None
+        l, b, pw, ph = self.inv_layout()
+        top = b + ph - 112 + 16
+        bot = top - self.CRAFT_ROWS * self.ROW_PITCH + 4
+        x = l + 410 + 554
+        span = top - bot
+        th = max(24, span * self.CRAFT_ROWS / n)
+        t0 = top - (span - th) * self.craft_scroll() / (n - self.CRAFT_ROWS)
+        return (x, x + 8, bot, top), (x, x + 8, t0 - th, t0)
+
+    # ------------------------------------------------------------------ scrolling menus (wheel / keys / stick)
+    def ui_scroll(self, steps):
+        """Mouse wheel (or keys / right stick) while a menu is open. steps > 0 scrolls down.
+        Scrolls whichever list the pointer (or controller cursor) is over."""
+        mx = self.mouse_screen[0]
+        if self.ui_open == "inv":
+            l, b, pw, ph = self.inv_layout()
+            if mx < l + 400:
+                self.grid_scroll("inv", steps, len(self.me.inv), self.INV_COLS, self.INV_ROWS)
+            else:
+                self.scroll_crafting(steps)
+        elif self.ui_open == "storage":
+            l, b, pw, ph = self.storage_layout()
+            if mx < l + 450:
+                self.grid_scroll("st_m", steps, len(self.me.inv), 5, 5)
+            else:
+                self.grid_scroll("st_t", steps, len(self.storage), 6, 5)
+        elif self.ui_open == "pets":
+            self.scroll_pets(steps)
+
+    def ui_scroll_key(self, key):
+        """UP / DOWN / PAGE UP / PAGE DOWN in a menu. True if the key was used."""
+        if self.ui_open not in ("inv", "pets", "storage") or not self.me:
+            return False
+        page = self.CRAFT_ROWS if self.ui_open == "inv" else 4
+        step = {arcade.key.UP: -1, arcade.key.DOWN: 1, arcade.key.PAGEUP: -page,
+                arcade.key.PAGEDOWN: page}.get(key)
+        if step is None:
+            return False
+        self.ui_scroll(step)
+        return True
+
+    def ui_scroll_pad(self, pad, dt):
+        """Controller: the right stick scrolls the open menu (a step every ~0.12s while held)."""
+        ry = pad.right[1]
+        self._scroll_t = getattr(self, "_scroll_t", 0) - dt
+        if abs(ry) < 0.5:
+            self._scroll_t = 0
+        elif self._scroll_t <= 0:
+            self.ui_scroll(1 if ry < 0 else -1)
+            self._scroll_t = 0.22 if abs(ry) < 0.85 else 0.12
 
     def draw_inventory(self):
         me = self.me
@@ -436,23 +569,24 @@ class UI:
         self.txt("crs", f"tabs: {tabkeys}", l + 540, b + ph - 36, (170, 170, 170), 11)
         mx, my = self.mouse_screen
         tip = None
-        items = self.inv_items()
-        top = b + ph - 56
+        top = self.inv_grid_top()
+        shown = self.inv_slots()
         for idx in range(self.INV_COLS * self.INV_ROWS):
             cl, cr, cb, ct = self.grid_rect(l + 24, top, idx, self.INV_COLS)
-            if idx < len(items) and items[idx][0] in me.hotbar:
+            if idx < len(shown) and shown[idx][0] in me.hotbar:
                 arcade.draw_lrbt_rectangle_filled(cl - 2, cr + 2, cb - 2, ct + 2, (255, 214, 120, 60))
             arcade.draw_lrbt_rectangle_filled(cl, cr, cb, ct, (34, 40, 48, 230))
             arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, (255, 255, 255, 35), 1)
-            if idx < len(items):
-                it, n = items[idx]
+            if idx < len(shown):
+                it = shown[idx][0]
                 arcade.draw_texture_rect(art.icon(it), arcade.XYWH((cl + cr) / 2, (cb + ct) / 2 + 3, 40, 40))
-                self.txt(f"ic{idx}", str(n), cr - 5, cb + 4, (255, 255, 255), 11, anchor_x="right", bold=True)
+                self.txt(f"ic{idx}", str(me.inv.get(it, 0)), cr - 5, cb + 4, (255, 255, 255), 11, anchor_x="right",
+                         bold=True)
                 if cl < mx < cr and cb < my < ct:
                     tip = it
-        if len(items) > self.INV_COLS * self.INV_ROWS:
-            self.txt("more", f"+{len(items) - 25} more kinds - stash some in storage!", l + 120, b + 172,
-                     (255, 180, 150), 10)
+        # no item is ever lost: a long backpack just scrolls
+        self.draw_grid_bar("inv", l + 24 + self.INV_COLS * (self.SLOT + self.GAP), top, len(me.inv),
+                           self.INV_COLS, self.INV_ROWS, "inv")
         # worn gear
         self.txt("worn", "WEARING", l + 24, b + 172, (255, 230, 170), 12, bold=True)
         for slot, (cl, cr, cb, ct) in self.worn_slots():
@@ -493,8 +627,12 @@ class UI:
         use_store = self.near_storage(me, 220)
         hover_desc = None
         for gi, rec, (rl, rr, rb, rt) in self.recipe_rows():
-            ok = self.can_craft(me, rec)
             hover = rl < mx < rr and rb < my < rt
+            if not explore.known(self, rec):       # explore.py: not found yet - a silhouette and where to look
+                desc = explore.draw_locked_recipe(self, gi, rec, (rl, rr, rb, rt), hover)
+                hover_desc = desc if hover else hover_desc
+                continue
+            ok = self.can_craft(me, rec)
             arcade.draw_lrbt_rectangle_filled(rl, rr, rb, rt, (60, 80, 60, 210) if hover and ok else
                                               (70, 50, 50, 190) if hover else (34, 40, 48, 210))
             item = rec["item"]
@@ -512,6 +650,18 @@ class UI:
             self.txt(f"rc{gi}", cost + at, rr - 10, rb + 10, col, 10, anchor_x="right")
             if hover:
                 hover_desc = ITEMS[item]["desc"]
+        bar = self.craft_scrollbar()
+        if bar:
+            (tl, tr, tb, tt), (hl, hr, hb, ht) = bar
+            arcade.draw_lrbt_rectangle_filled(tl, tr, tb, tt, (34, 40, 48, 220))
+            arcade.draw_lrbt_rectangle_filled(hl, hr, hb, ht, (255, 214, 140, 200))
+            n = len(CRAFT_TABS[TAB_NAMES[self.craft_tab]])
+            first = self.craft_scroll()
+            how = "right stick" if self.use_pad else "wheel / UP DOWN"
+            more = n - first - self.CRAFT_ROWS
+            note = f"{more} more below" if more > 0 else "end of list"
+            self.txt("crmore", f"recipes {first + 1}-{min(n, first + self.CRAFT_ROWS)} of {n}  -  {note}  "
+                     f"({how} to scroll)", l + pw - 22, tb - 14, (255, 214, 140), 10, anchor_x="right")
         stations = [("Workbench", self.station_ok(me, "workbench")), ("Furnace", self.station_ok(me, "furnace")),
                     ("Fire", self.station_ok(me, "campfire")), ("Team storage", use_store)]
         line = "   ".join(f"{n} {'YES' if ok else '-'}" for n, ok in stations)
@@ -531,6 +681,12 @@ class UI:
             if l < x < r and b < y < t:
                 self.action("craft", i=gi)
                 return
+        bar = self.craft_scrollbar()
+        if bar:                      # click the scrollbar track: page up / down
+            (l, r, b, t), (_, _, hb, ht) = bar
+            if l - 6 < x < r + 6 and b < y < t:
+                self.scroll_crafting(-self.CRAFT_ROWS if y > ht else self.CRAFT_ROWS if y < hb else 0)
+                return
         for it, (l, r, b, t) in self.inv_slots():
             if l < x < r and b < y < t:
                 self.action("assign", item=it, s=me.selected)
@@ -548,11 +704,13 @@ class UI:
     def storage_cells(self):
         l, b, pw, ph = self.storage_layout()
         top = b + ph - 74
-        mine = self.inv_items()[:25]
-        mine = [(it, self.grid_rect(l + 24, top, i, 5)) for i, (it, _) in enumerate(mine)]
+        mine = self.inv_items()
+        first = self.grid_first("st_m", len(mine), 5, 5) * 5
+        mine = [(it, self.grid_rect(l + 24, top, i, 5)) for i, (it, _) in enumerate(mine[first:first + 25])]
         order = list(ITEMS)
-        team = sorted(self.storage.items(), key=lambda kv: order.index(kv[0]) if kv[0] in order else 999)[:30]
-        team = [(it, self.grid_rect(l + 470, top, i, 6)) for i, (it, _) in enumerate(team)]
+        team = sorted(self.storage.items(), key=lambda kv: order.index(kv[0]) if kv[0] in order else 999)
+        first = self.grid_first("st_t", len(team), 6, 5) * 6
+        team = [(it, self.grid_rect(l + 470, top, i, 6)) for i, (it, _) in enumerate(team[first:first + 30])]
         return mine, team
 
     def amount_rects(self):
@@ -586,6 +744,8 @@ class UI:
                 arcade.draw_texture_rect(art.icon(it), arcade.XYWH((cl + cr) / 2, (cb + ct) / 2 + 3, 40, 40))
                 self.txt(f"s{side}{i}", str(src.get(it, 0)), cr - 5, cb + 4, (255, 255, 255), 11, anchor_x="right",
                          bold=True)
+        self.draw_grid_bar("st_m", l + 24 + 5 * (self.SLOT + self.GAP), top, len(me.inv), 5, 5, "stm")
+        self.draw_grid_bar("st_t", l + 470 + 6 * (self.SLOT + self.GAP), top, len(self.storage), 6, 5, "stt")
         self.txt("amt", "Move:", l + 410, b + 31, (220, 220, 220), 12, bold=True)
         for i, (al, ar, ab, at) in self.amount_rects():
             on = i == self.move_amount
@@ -647,7 +807,8 @@ class UI:
         if fade <= 0:
             return
         a = int(255 * fade)
-        self.txt("cut_n", f"NIGHT {c['night']}", W / 2, H - 60, (200, 180, 160, a), 14, anchor_x="center", bold=True)
+        when = "NIGHT" if DUSK_START <= self.phase < DAWN_START else "DAY"     # (bosses woken by day, lairs.py)
+        self.txt("cut_n", f"{when} {c['night']}", W / 2, H - 60, (200, 180, 160, a), 14, anchor_x="center", bold=True)
         name = info["name"]
         shown = name[:max(0, min(len(name), int((t - 1.6) * 16)))]
         jitter = math.sin(t * 40) * 2 if t < 3.0 else 0
@@ -692,8 +853,8 @@ class UI:
                      anchor_x="center", bold=True)
             if t > 1.4:
                 la = int(255 * fade * ease((t - 1.4) / 0.5))
-                self.txt("ret_l", "...but it will be back tomorrow night.", W / 2, H / 2 + 98, (240, 230, 220, la), 19,
-                         anchor_x="center")
+                self.txt("ret_l", "...back to its lair. Wake it again when you're ready.", W / 2, H / 2 + 98,
+                         (240, 230, 220, la), 19, anchor_x="center")
             if t > 2.2 and c.get("hp"):
                 la = int(255 * fade * ease((t - 2.2) / 0.5))
                 self.txt("ret_h", c["hp"], W / 2, 46,
@@ -706,8 +867,16 @@ class UI:
         if self.menu == "main":
             name, day, night, gap = self.chosen_difficulty()
             return ["Play solo", "Host co-op game", "Join co-op game", "Local co-op (split screen)",
-                    "Load saved game", f"Difficulty:  {name}  ({day}s / {night}s,  boss every {gap} nights)",
-                    f"Fullscreen:  {'On' if self.fullscreen else 'Off'}   (F11)", "Quit"]
+                    "Load saved game", f"Difficulty:  {name}  ({day}s / {night}s,  bosses wake after {gap} nights)",
+                    "Screen & graphics...", "Quit"]
+        if self.menu == "gfx":
+            onoff = lambda v: "On" if v else "Off"
+            smooth = self.smooth_wanted()
+            later = "   (after a restart)" if smooth != getattr(self, "smooth_at_start", smooth) else ""
+            return [f"Fullscreen:  {onoff(self.fullscreen)}   (F11)",
+                    f"Smooth edges:  {onoff(smooth)}{later}",
+                    f"Glow effects:  {onoff(self.post_wanted())}",
+                    f"Sun shadows:  {self.shadows_mode().capitalize()}", "Back"]
         if self.menu == "local":
             return []
         if self.menu == "diff":
@@ -718,7 +887,7 @@ class UI:
             mark = "\u2022 " if cur == "Custom" else ""
             gap = self.chosen_difficulty()[3]
             return rows + [f"<      {mark}Custom day:  {day}s      >", f"<      {mark}Custom night:  {night}s      >",
-                           f"<      Nights between bosses:  {gap}      >", "Back"]
+                           f"<      Bosses wake on their own after:  {gap} nights      >", "Back"]
         if self.menu == "load":
             page = self.save_list[self.save_page * 5:(self.save_page + 1) * 5]
             rows = [savegame.save_label(meta) for _, meta in page]
@@ -733,8 +902,8 @@ class UI:
             if tuple(saved) != tuple(now):
                 use = self.use_title_difficulty
                 d = now if use else saved
-                gap = d[3] if len(d) > 3 else BOSS_EVERY
-                rows.append(f"Difficulty:  {d[0]} {d[1]}s / {d[2]}s, boss every {gap}   "
+                gap = d[3] if len(d) > 3 else BOSS_WAKE_NIGHTS
+                rows.append(f"Difficulty:  {d[0]} {d[1]}s / {d[2]}s, bosses wake after {gap}   "
                             f"({'title-screen setting' if use else 'as saved'})")
             rows.append("Delete this save")
             return rows + ["Back"]
@@ -752,7 +921,7 @@ class UI:
             self.menu, self.menu_sel = self.confirm_from
             self.menu_note = savegame.save_label(self.picked_save[1]) if self.menu == "save" else ""
             return
-        back = {"diff": ("main", 5), "load": ("main", 4), "save": ("load", 0)}
+        back = {"diff": ("main", 5), "load": ("main", 4), "save": ("load", 0), "gfx": ("main", 6)}
         self.menu, self.menu_sel = back.get(self.menu, ("main", 0))
         self.menu_note = ""
 
@@ -811,9 +980,20 @@ class UI:
                 self.menu, self.menu_note = "diff", ""
                 self.menu_sel = names.index(cur) if cur in names else len(names)
             elif i == 6:
-                self.toggle_fullscreen()
+                self.menu, self.menu_sel, self.menu_note = "gfx", 0, ""
             else:
                 arcade.exit()
+        elif self.menu == "gfx":        # post3d.py: smooth edges (MSAA) and glow (bloom); shadows3d.py: shadows
+            if i == 0:
+                self.toggle_fullscreen()
+            elif i == 1:
+                self.toggle_smooth()
+            elif i == 2:
+                self.toggle_glow()
+            elif i == 3:
+                self.toggle_shadows()
+            else:
+                self.menu_back()
         elif self.menu == "diff":
             n = len(DIFFICULTIES)
             if i < n:
@@ -901,6 +1081,14 @@ class UI:
         self.txt("t2", "LAST LIGHT", W / 2, H - 154, (255, 214, 140), 68, anchor_x="center", bold=True)
         self.txt("t3", "Gather by day.  Build by dusk.  Survive the night - together.", W / 2, H - 200,
                  (230, 230, 230), 17, anchor_x="center")
+        if getattr(self, "_upd", None) is None:      # updates.py: is a newer version out? (background, quiet offline)
+            self._upd = updates.Checker()
+        self.txt("ver", f"version {self._upd.mine}", W - 12, 12, (150, 150, 150), 11, anchor_x="right")
+        if self._upd.latest:
+            v = self._upd.latest["version"]
+            arcade.draw_lrbt_rectangle_filled(W / 2 - 330, W / 2 + 330, H - 262, H - 222, (120, 70, 20, 200))
+            self.txt("upd1", f"NEW VERSION {v} IS OUT!  Close the game and open \"Play Last Light\" to update.",
+                     W / 2, H - 248, (255, 230, 170), 13, anchor_x="center", bold=True)
         if self.menu == "join":
             self.txt("jt", "JOIN A GAME", W / 2, 420, (255, 230, 170), 18, anchor_x="center", bold=True)
             if not (self.finder and self.finder.list()):
@@ -910,9 +1098,9 @@ class UI:
         if self.menu == "local":
             self.draw_lobby()
             return
-        heads = {"diff": "DIFFICULTY  -  day & night length, and how often bosses come",
+        heads = {"diff": "DIFFICULTY  -  day & night length, and how long the bosses sleep",
                  "load": "LOAD A SAVED GAME", "save": "RESUME THIS GAME AS...",
-                 "confirm": "DELETE THIS SAVE?"}
+                 "confirm": "DELETE THIS SAVE?", "gfx": "SCREEN & GRAPHICS"}
         if self.menu == "confirm":
             self.txt("conf0", "DELETE THIS SAVE?", W / 2, 440, (255, 140, 120), 24, anchor_x="center", bold=True)
             self.txt("conf1", self.menu_note, W / 2, 400, (255, 255, 255), 15, anchor_x="center", bold=True)
@@ -942,7 +1130,10 @@ class UI:
             lo_n, hi_n = CUSTOM_NIGHT_LIMITS
             lo_g, hi_g = BOSS_GAP_LIMITS
             self.txt("t6", f"LEFT / RIGHT or click the arrows (SHIFT = 30s).   Day {lo_d}-{hi_d}s,  night {lo_n}-{hi_n}s,  "
-                     f"bosses every {lo_g}-{hi_g} nights.   Saved with each game.", W / 2, 46, (160, 160, 160), 11,
+                     f"bosses wake by themselves after {lo_g}-{hi_g} nights.   Saved with each game.", W / 2, 46,
+                     (160, 160, 160), 11, anchor_x="center")
+            self.txt("t7", "Bosses sleep in their lairs until you wake them at the altar.  If nobody wakes or beats one "
+                     "for that long, the next one wakes by itself and comes for you.", W / 2, 28, (160, 160, 160), 11,
                      anchor_x="center")
         elif self.menu == "load":
             delete = "X" if self.use_pad else "DELETE"
@@ -951,10 +1142,15 @@ class UI:
         elif self.menu == "save":
             self.txt("t6", "Games save every morning, when you leave, and with S on the pause screen.   ESC = back",
                      W / 2, 46, (160, 160, 160), 11, anchor_x="center")
+        elif self.menu == "gfx":
+            self.txt("t6", "Smooth edges: no jagged edges (restart to change).   Glow: fires, crystals and eyes "
+                     "shine at night.", W / 2, 46, (160, 160, 160), 11, anchor_x="center")
+            self.txt("t7", "Sun shadows: trees, walls and creatures cast real shadows by day.   Turn things off "
+                     "(or shadows to Low) if the game is slow.", W / 2, 28, (160, 160, 160), 11, anchor_x="center")
         elif self.menu == "confirm":
             self.txt("t6", "ESC / B = keep it", W / 2, 46, (160, 160, 160), 11, anchor_x="center")
         else:
-            self.txt("t6", "Tame animals  -  craft armor  -  explore the caves  -  a boss rises every 3rd night",
+            self.txt("t6", "Tame animals  -  craft armor  -  explore the caves  -  find the bosses' lairs and wake them",
                      W / 2, 46, (160, 160, 160), 11, anchor_x="center")
 
     def draw_help(self, overlay):
@@ -973,10 +1169,11 @@ class UI:
             ("Right-click  |  LT", "build / eat / tame (hold the animal's food)"),
             ("1-8, wheel  |  LB / RB", "choose hotbar item"),
             ("TAB  |  Y", "backpack, crafting & armor"),
-            ("E  |  B", "open storage, use cave entrance, drink"),
+            ("E  |  B", "open storage, search a place, use cave entrance, drink, wake a boss at its lair"),
             ("Q  |  B", "quick eat / drink"), ("P  |  D-pad up", "Pets menu: names, orders, pet armor"),
             ("F  |  D-pad down", "quick order for all pets: follow / work / stay"),
-            ("SHIFT  |  hold X", "rest (heals in a hut or by a fire)"),
+            ("SHIFT + move  |  click L-stick", "sprint (uses energy - walking is free)"),
+            ("SHIFT standing  |  hold X", "rest (heals in a hut or by a fire)"),
         ]
         top = H - 120
         self.panel(W / 2 - 330, W / 2 + 330, top - len(lines) * 28 - 16, top + 14, 160)
@@ -984,7 +1181,7 @@ class UI:
             y = top - 12 - i * 28
             self.txt(f"hk_{i}", k, W / 2 - 40, y, (255, 214, 140), 13, anchor_x="right", bold=True)
             self.txt(f"hv_{i}", v, W / 2 - 20, y, (230, 230, 230), 13)
-        tips = ["Die and you lose what you carry - keep valuables in a Storage Bin.",
+        tips = ["Die and your backpack drops where you fell - get it back before the next dawn (or lose it).",
                 "Nights are cold: stay by fire, in a hut, or wear warm clothes (fur cloak!).",
                 "Workbench -> leather, armor, iron gear.  Furnace -> iron ingots.  Caves -> iron, coal, crystal."]
         for i, tline in enumerate(tips):
@@ -996,12 +1193,11 @@ class UI:
         arcade.draw_lrbt_rectangle_filled(0, W, H / 2 - 70, H / 2 + 90, (40, 0, 0, 160))
         self.txt("d1", "YOU DIED", W / 2, H / 2 + 34, (255, 80, 70), 44, anchor_x="center", bold=True)
         if me.respawn_t > 0:
-            sub = f"Back on your feet in {int(me.respawn_t) + 1}s - at your base, with empty pockets."
+            sub = f"Back on your feet in {int(me.respawn_t) + 1}s - at your base, with the starting things."
         else:
             left = int(self.secs_until(DAWN_START))
             sub = f"You died at night - you'll come back at dawn ({left}s)."
             if self.fast_forward:
                 sub = "Everyone is down... the night passes quickly."
         self.txt("d2", sub, W / 2, H / 2 - 10, (240, 230, 230), 15, anchor_x="center")
-        self.txt("d3", "Everything you carried is gone. Things in TEAM STORAGE are safe.", W / 2, H / 2 - 40,
-                 (220, 190, 190), 12, anchor_x="center")
+        self.txt("d3", self.pack_dead_lines(), W / 2, H / 2 - 40, (220, 190, 190), 12, anchor_x="center")

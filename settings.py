@@ -7,10 +7,12 @@ CAM_PITCH_DEG = 52         # how steeply the camera looks down (90 = straight do
 CAM_FOV_DEG = 50           # vertical field of view
 CAVE_WALL_HEIGHT = 95      # how tall cave walls are
 BUILD_WALL_HEIGHT = 60     # how tall the walls you build are
-WORLD_SIZE = 3200          # the surface map is WORLD_SIZE x WORLD_SIZE pixels
+WORLD_SIZE = 3200          # the LEGACY (worldgen 1) surface size. Each world has its own: game.world_size /
+                           # layer.size (biomes.WORLD_SIZES) - don't use WORLD_SIZE in new code
 CAVE_SIZE = 2400           # the underground map
 CAVE_CELL = 60             # cave walls are built from cells this big
 CAVE_ENTRANCES = 3
+CAVE_ENTRANCES_V2 = 5      # worldgen 2 (the big map)
 GRID = 40                  # building snap grid
 
 # ----------------------------------------------------------------- player
@@ -18,11 +20,16 @@ PLAYER_SPEED = 210         # pixels per second
 TIRED_SPEED = 110          # speed when energy is empty
 STAT_MAX = 100
 
-HUNGER_DECAY_PER_SEC = 0.55
-THIRST_DECAY_PER_SEC = 0.8
-ENERGY_DECAY_PER_SEC = 0.9      # while walking
+# Hunger and thirst drain per real second (whatever the day length): a full bar lasts about 5 minutes
+# (hunger) and 4 minutes (thirst). Summer days / rain change thirst on top (weather.py).
+HUNGER_DECAY_PER_SEC = 0.33
+THIRST_DECAY_PER_SEC = 0.42
+# Walking is free. Sprinting (hold SHIFT while moving / click the left stick) is faster and costs energy;
+# with no energy left you can't sprint, and you walk slowly (TIRED_SPEED) until you rest.
+SPRINT_MULT = 1.55              # sprint speed = PLAYER_SPEED x this
+SPRINT_ENERGY_PER_SEC = 3.0     # a full bar of energy is ~33 seconds of sprinting
 SWING_ENERGY_COST = 1.2
-REST_RESTORE_PER_SEC = 12.0     # hold SHIFT
+REST_RESTORE_PER_SEC = 12.0     # hold SHIFT standing still (hold X on a controller)
 STARVE_DAMAGE_PER_SEC = 2.5
 THIRST_DAMAGE_PER_SEC = 3.5
 NATURAL_REGEN_PER_SEC = 0.6     # when hunger & thirst are above half
@@ -43,8 +50,9 @@ FIRE_WARM_RADIUS = 170
 DAY_CYCLE_SECONDS = 180    # one full day + night
 START_PHASE = 0.05         # start just after dawn
 DUSK_START, NIGHT_START, DAWN_START = 0.55, 0.65, 0.90
-BOSS_EVERY = 3             # the first boss rises on night 3; each next one 3 nights after the last is killed.
-                           # A boss that survives the night comes back every night until it's beaten.
+BOSS_EVERY = 3             # the OLD rhythm (a boss every 3rd night), only used to read saves made with it
+BOSS_WAKE_NIGHTS = 10      # bosses sleep in their lairs (lairs.py) until someone wakes them at the altar. If
+                           # nobody wakes or beats one for this many nights, the next one wakes by itself.
 # Difficulty = how long the day and the night last, in real seconds. "Night" runs from dusk to dawn
 # (when the zombies are out); "day" is the rest. Pick one on the title screen, or set your own.
 DIFFICULTIES = [
@@ -57,7 +65,32 @@ DIFFICULTIES = [
 DEFAULT_DIFFICULTY = "Default"
 CUSTOM_DAY_LIMITS = (30, 900)      # shortest / longest custom day, in seconds
 CUSTOM_NIGHT_LIMITS = (20, 600)    # shortest / longest custom night
-BOSS_GAP_LIMITS = (1, 10)          # "nights between bosses" setting (the default is BOSS_EVERY)
+BOSS_GAP_LIMITS = (2, 30)          # "bosses wake on their own after N nights" setting (default BOSS_WAKE_NIGHTS)
+
+# ----------------------------------------------------------------- seasons & weather (see weather.py)
+SEASONS = ["spring", "summer", "autumn", "winter"]
+SEASON_DAYS = 4            # days in each season (day 1-4 spring, 5-8 summer, ...)
+# chance of each weather when the weather changes, per season
+SEASON_WEATHER = {
+    "spring": {"clear": 45, "rain": 35, "storm": 8, "fog": 12},
+    "summer": {"clear": 65, "rain": 12, "storm": 18, "fog": 5},
+    "autumn": {"clear": 35, "rain": 32, "storm": 8, "fog": 25},
+    "winter": {"clear": 35, "snow": 50, "fog": 15},
+}
+WEATHER_SECONDS = (45, 120)       # how long one spell of weather lasts (real seconds, random)
+CLEAR_SECONDS = (60, 160)         # clear spells last a bit longer
+RAIN_FIRE_OUT_PER_SEC = 0.012     # chance per second that rain puts out an unsheltered campfire (storm x3)
+RAIN_FIRE_OUT_SECONDS = 14        # how long a rained-out fire takes to dry off and catch again
+SHELTER_RADIUS = 110              # a fire this close to a hut is sheltered from the rain
+RAIN_THIRST_PER_SEC = 0.18        # standing out in the rain: thirst drains this much slower
+SUMMER_THIRST_PER_SEC = 0.1       # summer days: thirst drains this much faster
+WINTER_COLD_PER_SEC = 1.3         # extra warmth lost on winter nights away from a fire / hut
+SNOW_COLD_PER_SEC = 0.6           # extra cold while it snows (day or night)
+STORM_COLD_PER_SEC = 0.6
+WINTER_ENERGY_PER_SEC = 0.5       # winter nights away from a fire also wear you out
+# how fast berry bushes regrow and animals turn up, per season (1 = normal)
+SEASON_BERRY_REGROW = {"spring": 1.3, "summer": 1.2, "autumn": 1.0, "winter": 0.4}
+SEASON_ANIMALS = {"spring": 1.8, "summer": 1.0, "autumn": 1.0, "winter": 0.5}
 
 # ----------------------------------------------------------------- enemies
 ZOMBIES = {
@@ -91,7 +124,7 @@ ANIMALS = {
             "desc": "Honey bee: on WORK it buzzes between flowers and brings honey to your Storage Bins."},
 }
 ANIMAL_CAP = 26
-MAX_PETS = 3               # per player - in co-op every tamer has their own 3
+MAX_PETS = 8               # per player - in co-op every tamer has their own 8
 PET_ARMOR_SOAK = 0.15      # each point of pet armor: bites do 1 / (1 + armor * this) damage
 PET_NAMES = ["Biscuit", "Pepper", "Shadow", "Maple", "Scout", "Clover", "Ember", "Rocky", "Hazel", "Bandit",
              "Sunny", "Tank", "Juniper", "Pickle", "Ranger", "Willow", "Nugget", "Ash", "Koda", "Bramble"]
@@ -134,6 +167,9 @@ BOSSES = {
                  "drops": {"ember_heart": 2, "iron_ore": 6, "coal": 6}},
 }
 BOSS_ORDER = ["titan", "brood", "wraith", "colossus"]
+
+POISON_SECONDS = 4.0          # Brood Fang venom: how long a poisoned enemy keeps hurting (see venom.py)
+POISON_DPS = 3.0              # ...and how much damage a second (bosses too)
 
 # ----------------------------------------------------------------- traps & ranged weapons
 SPIKE_ZOMBIE_DAMAGE = 3       # every 0.6s while a zombie stands on spikes
@@ -202,10 +238,15 @@ ITEMS = {
                      "desc": "Fast mining. The only thing that can break crystal."},
     "iron_sword": {"name": "Iron Sword", "kind": "weapon", "damage": 6, "reach": 70, "cooldown": 0.4,
                    "desc": "6 damage, quick swings."},
-    "frost_spear": {"name": "Frost Spear", "kind": "weapon", "damage": 7, "reach": 104, "cooldown": 0.5,
-                    "slow": 1, "desc": "7 damage, huge reach. Chills enemies so they slow down."},
-    "titan_hammer": {"name": "Titan Hammer", "kind": "weapon", "damage": 12, "reach": 76, "cooldown": 0.9,
-                     "quake": 1, "desc": "12 damage to EVERYTHING around you. Slow but devastating."},
+    # boss weapons climb with the boss order (titan -> brood -> wraith -> mire -> colossus):
+    # damage per second 16 (hits everything around you) -> 22 (with venom) -> 24 -> 31 -> 38 (+ burning)
+    "titan_hammer": {"name": "Titan Hammer", "kind": "weapon", "damage": 14, "reach": 76, "cooldown": 0.85,
+                     "quake": 1, "desc": "14 damage to EVERYTHING around you. Slow but devastating."},
+    "brood_fang": {"name": "Brood Fang", "kind": "weapon", "damage": 5.5, "reach": 66, "cooldown": 0.28,
+                   "poison": 1, "desc": "5.5 damage, lightning-fast stabs. Venom: poisoned enemies (even bosses) "
+                                        "take 3 damage a second for 4s."},
+    "frost_spear": {"name": "Frost Spear", "kind": "weapon", "damage": 11, "reach": 104, "cooldown": 0.45,
+                    "slow": 1, "desc": "11 damage, huge reach. Chills enemies so they slow down."},
     "repair_hammer": {"name": "Repair Hammer", "kind": "tool", "damage": 1.5, "reach": 70, "cooldown": 0.5,
                       "repair": 1, "desc": "Hit a damaged building to fix it. Costs part of its recipe - the more "
                                            "damage, the more it costs."},
@@ -215,8 +256,8 @@ ITEMS = {
                 "desc": "Shoots where you aim, 5 damage. Uses Arrows from your backpack. Keep your distance!"},
     "fire_pot": {"name": "Fire Pot", "kind": "throw", "damage": 18,
                  "desc": "Right-click to throw where you aim: bursts into flame, 18 damage + burning. Won't hurt friends."},
-    "ember_blade": {"name": "Ember Blade", "kind": "weapon", "damage": 9, "reach": 74, "cooldown": 0.36,
-                    "burn": 1, "desc": "9 damage and sets enemies on fire."},
+    "ember_blade": {"name": "Ember Blade", "kind": "weapon", "damage": 13, "reach": 76, "cooldown": 0.34,
+                    "burn": 1, "desc": "13 damage, quick swings, and sets enemies on fire. The best blade there is."},
     # --- armor & clothing (slot: head | body | cloak)
     "leather_cap":   {"name": "Leather Cap", "kind": "armor", "slot": "head", "armor": 1, "warmth": 1,
                       "desc": "Armor 1, warmth 1."},
@@ -228,16 +269,16 @@ ITEMS = {
                       "desc": "Armor 3."},
     "iron_armor":    {"name": "Iron Armor", "kind": "armor", "slot": "body", "armor": 5, "warmth": 0,
                       "desc": "Armor 5. Cold metal - wear a cloak."},
-    "chitin_armor":  {"name": "Chitin Armor", "kind": "armor", "slot": "body", "armor": 7, "warmth": 2,
-                      "desc": "Armor 7, warmth 2."},
-    "frost_cloak":   {"name": "Frost Cloak", "kind": "armor", "slot": "cloak", "armor": 2, "warmth": 14,
-                      "desc": "Armor 2, warmth 14. You'll never be cold again."},
+    "chitin_armor":  {"name": "Chitin Armor", "kind": "armor", "slot": "body", "armor": 12, "warmth": 3, "speed": 0.1,
+                      "desc": "Armor 12, warmth 3. Light as a shell: you move 10% faster. The best body armor."},
+    "frost_cloak":   {"name": "Frost Cloak", "kind": "armor", "slot": "cloak", "armor": 4, "warmth": 14,
+                      "desc": "Armor 4, warmth 14. You'll never be cold again."},
     "pet_leather_armor": {"name": "Leather Pet Armor", "kind": "petarmor", "armor": 3,
                           "desc": "Pet armor 3: bites hurt your pet about a third less. Put it on in the Pets menu (P)."},
     "pet_iron_armor": {"name": "Iron Pet Armor", "kind": "petarmor", "armor": 6,
                        "desc": "Pet armor 6: bites do about half damage. Lost if the pet dies. Pets menu (P)."},
     "titan_plate":   {"name": "Titan Plate", "kind": "armor", "slot": "body", "armor": 10, "warmth": 2,
-                      "desc": "Armor 10, warmth 2. The best protection there is."},
+                      "desc": "Armor 10, warmth 2. Heavy stone plate - the Brood Mother's chitin is even better."},
     # --- buildings
     "wood_wall":  {"name": "Wood Wall", "kind": "build", "hp": 45, "desc": "Blocks zombies. Right-click to place."},
     "stone_wall": {"name": "Stone Wall", "kind": "build", "hp": 120, "desc": "Tough wall."},
@@ -258,6 +299,14 @@ ITEMS = {
     "furnace":    {"name": "Furnace", "kind": "build", "hp": 140, "desc": "Smelts iron ore into ingots."},
     "storage":    {"name": "Storage Bin", "kind": "build", "hp": 160,
                    "desc": "TEAM storage, shared by everyone. Safe when you die. Craft straight out of it."},
+    # --- base defenses (defenses.py)
+    "arrow_turret": {"name": "Arrow Turret", "kind": "build", "hp": 150,
+                     "desc": "Shoots the nearest zombie or boss in range by itself (4 damage). Each shot uses one "
+                             "Arrow from TEAM STORAGE. Zombies attack it - fix it with the Repair Hammer."},
+    "gate":       {"name": "Gate", "kind": "build", "hp": 70,
+                   "desc": "A wall piece you and your pets walk straight through - zombies can't. Put it in your walls."},
+    "lantern":    {"name": "Lantern", "kind": "build", "hp": 40,
+                   "desc": "Zombies near it slow down to half speed, and it lights up the night around it."},
 }
 HANDS = {"name": "Fists", "damage": 1, "reach": 50, "cooldown": 0.40}
 ARMOR_SLOTS = ["head", "body", "cloak"]
@@ -275,6 +324,8 @@ NODES = {
     "coal":    {"gives": "coal", "hp": 6, "regrow": 160, "needs": "pickaxe"},
     "crystal": {"gives": "crystal", "hp": 10, "regrow": 260, "needs": "iron_pickaxe"},
 }
+# pickaxe strength: a node that "needs" a pickaxe can be mined with that pickaxe or any stronger one
+PICK_TIER = {"pickaxe": 1, "iron_pickaxe": 2}
 
 # crafting: item, cost, station needed (None = anywhere), menu tab, how many you get
 def R(item, cost, at=None, n=1):
@@ -291,6 +342,7 @@ CRAFT_TABS = {
         R("iron_axe", {"wood": 2, "iron_ingot": 3}, "workbench"),
         R("iron_pickaxe", {"wood": 2, "iron_ingot": 3}, "workbench"),
         R("iron_sword", {"wood": 1, "iron_ingot": 4, "leather": 1}, "workbench"),
+        R("brood_fang", {"chitin": 2, "iron_ingot": 2, "leather": 1}, "workbench"),
         R("frost_spear", {"wood": 3, "iron_ingot": 2, "frost_shard": 2}, "workbench"),
         R("bow", {"wood": 6, "fiber": 5}, "workbench"),
         R("repair_hammer", {"wood": 3, "stone": 2}),
@@ -322,6 +374,9 @@ CRAFT_TABS = {
         R("furnace", {"stone": 16, "wood": 4}, "workbench"),
         R("iron_wall", {"iron_ingot": 2, "stone": 2}, "workbench"),
         R("brazier", {"iron_ingot": 2, "coal": 3, "stone": 4}, "workbench"),
+        R("gate", {"wood": 5, "fiber": 2}),
+        R("lantern", {"wood": 3, "stone": 2, "fiber": 2}),
+        R("arrow_turret", {"wood": 8, "stone": 6, "iron_ore": 2}, "workbench"),
     ],
     "Supplies": [
         R("bandage", {"fiber": 3}),
@@ -347,3 +402,6 @@ TREE_COUNT, ROCK_COUNT, BUSH_COUNT, POND_COUNT, IRON_COUNT = 230, 120, 95, 9, 18
 CAVE_ROCKS, CAVE_IRON, CAVE_COAL, CAVE_CRYSTAL = 40, 34, 30, 16
 TREE_HP, ROCK_HP = 6, 6
 TREE_REGROW, ROCK_REGROW, BERRY_REGROW = 90, 120, 45
+
+# node kinds you can walk over / through (not solid for anyone)
+WALKABLE_NODES = {"rock", "bush", "reeds", "river_reeds", "clay", "glowcap", "tall_grass", "heather"}

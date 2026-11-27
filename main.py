@@ -3,7 +3,7 @@ LAST LIGHT - a top-down survival game (version 2 of PythonGame2025).
 
 Gather by day, build and fight by night - alone or with up to 3 friends on the same Wi-Fi.
 Craft at a workbench, smelt iron, tame animals, store loot in team storage, explore the caves,
-and survive a boss every third night.
+find the bosses' lairs and wake them when you dare (lairs.py).
 
 Run:                      python3 main.py
 Host a co-op game:        python3 main.py --host
@@ -21,21 +21,35 @@ import sys
 
 import arcade
 
+import swamp  # noqa: F401  (first: adds the Mire's items, recipes and boss before ui.py reads them)
+import biomes  # noqa: E402  (biome registry; then every biome / terrain / layer plug-in registers itself)
+biomes.load_plugins()
+import lairs  # noqa: E402  (the bosses' lairs: registers itself like the biome plug-ins, after them)
+import base  # noqa: F401  (also early: adds the Base Flag recipe before ui.py reads the tabs)
 import art
 import art_bees
+import art_defenses
 import art_extra
 import art_gear
+import backpack
+import defenses
+import explore  # places to discover, their loot and the recipes you find there
+import firstperson
 import intro
 import local_coop
 import net
 import options
+import post3d
 import pets
+import progress
 import repair
 import savegame
 import spells
 import elements
 import ui
+import venom
 import view3d
+import weather
 from gamepad import Gamepad
 from settings import *
 from world import LAYERS, Animal, Boss, Hazard, Node, Shot, Structure, Zombie, build_world, dist
@@ -97,6 +111,9 @@ class Survivor:
         self.face = 0.0
         self.attacking = False
         self.resting = False
+        self.sprinting = False    # holding sprint (SHIFT while moving, or the left stick clicked) - backpack.py
+        self.pad_sprint = False   # controller: the left stick was clicked, until you stop moving
+        self.sprint_seen = False  # online client: the host says this teammate is sprinting (dust)
         self.attack_cd = 0.0
         self.swing = 0.0
         self.swings = 0
@@ -135,11 +152,21 @@ class Survivor:
 
 
 # =========================================================================== game
-class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spells, savegame.SaveGame, pets.Pets,
-                repair.Repair,
-                ui.UI, arcade.Window):
+class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, post3d.Post3D, options.Options, spells.Spells, savegame.SaveGame, pets.Pets, repair.Repair,
+                backpack.Backpacks,
+                progress.Progress, weather.Weather, defenses.Defenses, swamp.Swamp, ui.UI, arcade.Window):
     def __init__(self):
-        super().__init__(W, H, SCREEN_TITLE)
+        # "Smooth edges" (MSAA, options in post3d.py): arcade asks for 4 samples and quietly skips them if the
+        # driver has none. Some drivers say yes and then fail to make the window - then try again without.
+        smooth = load_config().get("smooth_edges", True) is not False
+        try:
+            super().__init__(W, H, SCREEN_TITLE, antialiasing=smooth)
+        except Exception as e:      # noqa: BLE001 - never fail to start over an extra
+            if not smooth:
+                raise
+            print("Smooth edges aren't available on this computer - starting without them.", e)
+            super().__init__(W, H, SCREEN_TITLE, antialiasing=False)
+        self.smooth_at_start = smooth     # the options screen says "after a restart" if it is changed
         self.background_color = (24, 34, 22)
         self.camera = arcade.Camera2D()
         self.gui = arcade.Camera2D()
@@ -190,17 +217,29 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         save_config(self.cfg)
 
     def on_close(self):
-        if self.can_save():
-            self.save_game()      # closing the window never loses your game
+        self.save_on_exit()       # closing the window never loses your game (even mid-cutscene)
         super().on_close()
 
     # ------------------------------------------------------------------ setup
-    def setup(self, seed):
+    def setup(self, seed, worldgen=None):
+        """Build the world from its seed. worldgen: biomes.LEGACY for old saves / old hosts, None = newest."""
         self.seed = seed
-        self.layers, self.nodes, self.links = build_world(seed)
+        self.worldgen = int(worldgen or biomes.WORLDGEN)
+        self.layout = biomes.make_layout(seed, self.worldgen, self)
+        self.world_size = self.layout.size
+        self.layers, self.nodes, self.links = build_world(seed, self.worldgen, self.layout)
         self.over, self.cave = self.layers["over"], self.layers["cave"]
-        self.place_shrines()       # spells.py: one spell shrine per element, deep in the cave
-        self.centre = (WORLD_SIZE / 2, WORLD_SIZE / 2)
+        self.node_spans = {"base": [0, len(self.nodes)]}
+        self.build_swamp()         # swamp.py: the Mire (only adds nodes at the end, so saves still line up)
+        self.node_spans["mire"] = [self.node_spans["base"][1], len(self.nodes) - self.node_spans["base"][1]]
+        self.portals = [("over", tuple(a), "cave", tuple(b)) for a, b in self.links]
+        biomes.generate(self)      # biomes.py: every plug-in's content, in a fixed order, own random streams
+        for L in self.layers.values():     # rocks, bushes, reeds, clay...: walk over / through them
+            for n in [s for s in L.solid if getattr(s, "kind", None) in WALKABLE_NODES]:
+                L.solid.remove(n)
+        self.animal_cap = int(ANIMAL_CAP * min(2.0, biomes.area_scale(self.worldgen)))
+        self.place_shrines()       # spells.py: one spell shrine per element, deep in the cave (own random stream)
+        self.centre = (self.world_size / 2, self.world_size / 2)
         self.player_list = arcade.SpriteList()
         self.held_list = arcade.SpriteList()
         self.cloak_list = arcade.SpriteList()     # worn cloaks (drawn under the survivors)
@@ -214,9 +253,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         self.hazards = []
         self.shots = []            # arrows and fire pots in the air
         self.rings = []
-        self.boss_num = 0          # how many bosses have been killed (picks the next one from BOSS_ORDER)
-        self.boss_day = BOSS_EVERY # the night the next boss rises
-        self.boss_hp = None        # a boss that got away keeps its wounds and comes back the next night
+        self.boss_num = 0          # how many bosses have been killed (each lair counts its own: lairs.py)
+        self.boss_day = BOSS_WAKE_NIGHTS   # the night a boss wakes by itself if nobody wakes one (lairs.py)
+        self.boss_hp = None        # the wounds of the boss that's out / ran home (each lair keeps its own)
         self.storage = {}
         self.nodes_ver = self.struct_ver = self.storage_ver = 0
         self.sent_nodes_ver = self.sent_struct_ver = self.sent_storage_ver = -1
@@ -251,6 +290,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         self.cold_mult = 1.0
         self.fast_forward = False
         self.animal_t = 0.0
+        self.weather_setup()       # weather.py: seasons & weather
+        self.base_setup()          # base.py: base areas, cleared spots, nodes turning up elsewhere
+        self.packs_setup()         # backpack.py: the packs dropped where survivors died
 
     def add_player(self, name, conn=None, pid=None):
         if pid is None:
@@ -429,6 +471,12 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             self.start_cutscene(ev[1], ev[2], ev[3], ev[4], local=True, mode=mode, hp=hp)
         elif k == "cutend":
             self.cut = None
+        elif k == "stats":
+            self.progress_event(ev)      # progress.py: my run stats, sent by the host
+        elif k == "bio":
+            self.biome_event(ev)         # biomes.py: a plug-in's own event (["bio", module, ...])
+        else:
+            self.swamp_event(ev)       # swamp.py: roots holding you in place
 
     # ------------------------------------------------------------------ time of day
     @property
@@ -437,6 +485,10 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
 
     @property
     def darkness(self):
+        return max(self.sky_darkness, getattr(self, "boss_gloom", 0.0))   # lairs.py: a boss out by day darkens it
+
+    @property
+    def sky_darkness(self):
         p = self.phase
         if p < DUSK_START:
             return 0.0
@@ -455,7 +507,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         return self.day >= self.boss_day
 
     def next_boss(self):
-        return BOSSES[BOSS_ORDER[self.boss_num % len(BOSS_ORDER)]]
+        """The boss that wakes by itself next (lairs.py: the first unbeaten one)."""
+        return BOSSES[lairs.next_kind(self)]
 
     @property
     def view_layer(self):
@@ -603,6 +656,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         return p.inv.get(item, 0) + (self.storage.get(item, 0) if use_storage else 0)
 
     def can_craft(self, p, rec):
+        if not explore.known(self, rec):     # explore.py: a recipe still waiting to be found out in the world
+            return False
         if not self.station_ok(p, rec["at"]):
             return False
         s = self.near_storage(p, 220)
@@ -614,7 +669,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         rec = RECIPES[idx]
         if not self.can_craft(p, rec):
             self.play("error", 0.25, to=p)
-            if not self.station_ok(p, rec["at"]):
+            if not explore.known(self, rec):
+                self.say("You don't know how to make that yet - find it out in the world.", 2.5, to=p)
+            elif not self.station_ok(p, rec["at"]):
                 self.say(f"Stand next to a {STATIONS.get(rec['at'], rec['at'])} to make that.", 2, to=p)
             else:
                 self.say("Not enough materials.", 2, to=p)
@@ -627,6 +684,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             if v - from_inv and use_store:
                 self.store_take(k, v - from_inv)
         self.give(p, rec["item"], rec["n"])
+        self.stat(p, "crafted")
         self._hotbar_add(p, rec["item"], force=True)
         self.play("craft", 0.3, to=p)
         extra = "  (click it in the backpack to wear it)" if ITEMS[rec["item"]]["kind"] == "armor" else ""
@@ -635,7 +693,11 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
     # ------------------------------------------------------------------ eating & interacting
     def consume(self, p, item):
         info = ITEMS[item]
-        if info["kind"] != "food" or not self.take(p, item):
+        if info["kind"] != "food":
+            if p.inv.get(item, 0) > 0:
+                self.biome_use(p, item)        # biomes.py: e.g. planting seeds (terrain.py)
+            return
+        if not self.take(p, item):
             return
         p.hunger = min(STAT_MAX, p.hunger + info.get("hunger", 0))
         p.thirst = min(STAT_MAX, p.thirst + info.get("thirst", 0))
@@ -670,7 +732,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             self.say("Nothing useful to eat or drink right now.", 1.5, to=p)
 
     def near_pond(self, p):
-        return p.layer == "over" and any(dist(p.pos, s.position) < 150 for s in self.over.ponds)
+        return p.layer == "over" and (any(dist(p.pos, s.position) < 150 for s in self.over.ponds)
+                                      or self.water_near(p.pos))       # biomes.py: rivers & lakes too
 
     def near_exit(self, p):
         for s in self.layers[p.layer].exits:
@@ -692,24 +755,35 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         ex = self.near_exit(p)
         if not ex:
             return
-        for surf, cave in self.links:
-            if p.layer == "over" and dist(ex.position, surf) < 5:
-                self.set_layer(p, "cave", (cave[0] + 45, cave[1]))
-                self.say("UNDERGROUND. It's cold and dark - bring a torch. Ore and crystal down here!", 5, to=p)
-                break
-            if p.layer == "cave" and dist(ex.position, cave) < 5:
-                self.set_layer(p, "over", (surf[0] + 60, surf[1]))
-                self.say("Back to the surface.", 2, to=p)
-                break
+        lock = self.portal_lock(p.layer, ex.position)    # biomes.PORTAL_LOCKS, e.g. a plugged shaft
+        if lock:
+            self.say(lock, 3, to=p)
+            self.play("mine", 0.15, to=p)
+            return
+        far = self.portal_from(p.layer, ex.position)     # biomes.py: over <-> cave, cave <-> deep, ...
+        if far is not None:
+            layer, (x, y) = far
+            down = biomes.depth(layer) > biomes.depth(p.layer)
+            msg = biomes.LAYER_INFO[layer].enter if down else biomes.LAYER_INFO[p.layer].leave
+            self.set_layer(p, layer, (x + (60 if layer == "over" else 45), y))
+            if msg:
+                self.say(msg, 5 if down else 2, to=p)
         p.tp += 1
         self.play("travel", 0.3, to=p)
 
     def interact(self, p):
-        """E / B: use a cave entrance or drink - whichever is at hand (storage opens on your own screen)."""
+        """E / B: pick up your backpack, use a cave entrance, a boss's altar, search a place or drink - whichever
+        is at hand (storage opens on your own screen)."""
+        if self.pickup_pack(p, backpack.REACH):     # backpack.py
+            return
         if self.near_exit(p):
             self.travel(p)
         elif self.near_shrine(p):
             self.learn_at_shrine(p, self.near_shrine(p))     # spells.py
+        elif lairs.near_altar(self, p):       # lairs.py: wake a boss
+            lairs.use_altar(self, p, lairs.near_altar(self, p))
+        elif explore.open_near(self, p):      # explore.py: search an abandoned place's chest
+            pass
         elif self.near_pond(p):
             self.drink(p)
 
@@ -746,6 +820,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         if random.random() < a.info["chance"]:
             a.owner, a.mode, a.hp, a.aggro = p.id, "follow", a.max_hp, None
             a.name = self.random_pet_name(p)
+            self.on_tamed(p)
             self.burst(a.center_x, a.center_y, (255, 120, 160), 14, 90, 3, 0.9)
             self.play("tame", 0.35, to=p)
             self.say(f"You tamed a {a.kind} - meet {a.name}!  {a.info['desc']}  "
@@ -768,9 +843,12 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         ghost = arcade.Sprite(art.icon(item), center_x=x, center_y=y)
         ok = dist((x, y), p.pos) < 190 and 40 < x < L.size - 40 and 40 < y < L.size - 40
         if ok:
-            ok = not arcade.check_for_collision_with_lists(ghost, [L.solid, L.huts, L.zombies, L.traps, L.exits])
-            if ok and item != "hut" and item not in TRAP_KINDS:
+            ok = not arcade.check_for_collision_with_lists(ghost, [L.solid, L.huts, L.zombies, L.traps, L.exits]
+                                                            + self.defense_blockers(L))
+            if ok and item != "hut" and item not in TRAP_KINDS and item not in defenses.WALK_THROUGH:
                 ok = not arcade.check_for_collision_with_list(ghost, self.player_list)
+            if ok:
+                ok = self.biome_build_ok(item, x, y, p.layer)     # biomes.py: no campfires in rivers...
         return item, ghost, ok
 
     def place(self, p, target):
@@ -784,6 +862,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             return True
         self.take(p, item)
         s = self.add_structure(item, ghost.center_x, ghost.center_y, layer=p.layer)
+        self.on_built(p, item)
         self.burst(s.center_x, s.center_y, (200, 170, 120), 10, 90, layer=p.layer)
         self.play("place", 0.25, at=s.position, layer=p.layer)
         if item == "storage":
@@ -805,7 +884,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             L.traps.append(s)
         else:
             L.builds.append(s)
-            L.solid.append(s)
+            if kind not in defenses.WALK_THROUGH:   # gates: survivors walk through, zombies don't
+                L.solid.append(s)
+        self.add_defense(s, L)          # defenses.py: gates, lanterns, turrets
         if kind in LIGHT_SOURCES:
             f = arcade.Sprite(art.flame(0), center_x=s.center_x, center_y=s.center_y + 6,
                               scale=1.0 if kind == "campfire" else 0.8)
@@ -856,6 +937,10 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         if n.kind == "tree":
             n.texture = art.tree(n.variant) if state == "full" else art.stump()
             n.angle = n.base_angle if state == "full" else 0
+            if state != "full" and L.solid in n.sprite_lists:      # a stump: walk over it, build on it
+                L.solid.remove(n)
+            elif state == "full" and L.solid not in n.sprite_lists:
+                L.solid.append(n)
         elif n.kind == "bush":
             n.texture = art.bush(state == "full")
         elif n.kind == "hive":   # never solid; hidden while its tree is a stump
@@ -865,7 +950,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             n.visible = state != "gone"
             if state == "gone" and L.solid in n.sprite_lists:
                 L.solid.remove(n)
-            elif state != "gone" and L.solid not in n.sprite_lists:
+            elif state != "gone" and L.solid not in n.sprite_lists and n.kind not in WALKABLE_NODES:
                 L.solid.append(n)
         self.nodes_ver += 1
 
@@ -901,6 +986,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                 got[give] += 2
                 self.set_node_state(n, "stump")
                 n.timer = TREE_REGROW
+                self.node_used_up(n)     # base.py: it grows back somewhere else, never here
                 if n.hive:   # the hive falls with the tree
                     if n.hive.state == "full":
                         got["honey"] = HIVE_HONEY
@@ -910,7 +996,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                 if n.kind in ("iron", "coal"):
                     got["stone"] = 1
                 self.set_node_state(n, "gone")
-                self.regrow.append([NODES[n.kind]["regrow"], n])
+                self.node_used_up(n)     # base.py: it turns up again somewhere else, never here
         return got
 
     def attack(self, p):
@@ -927,6 +1013,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             self.shoot(p, w)
             return
         if w.get("repair") and self.repair(p):     # repair.py: hammer aimed at a building
+            return
+        if self.biome_swing(p, item, w):           # biomes.py: fishing rods, hoes, picking crops...
             return
         if w.get("spellbook"):                      # spells.py
             self.cast(p)
@@ -965,16 +1053,15 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             return
         n = min(nodes, key=lambda n: dist(n.position, (px, py)))
         need = NODES[n.kind].get("needs")
-        if need == "pickaxe" and item not in ("pickaxe", "iron_pickaxe"):
-            self.say("You need a pickaxe to mine that.", 1.5, to=p)
-            self.play("mine", 0.15, to=p)
-            return
-        if need == "iron_pickaxe" and item != "iron_pickaxe":
-            self.say("Crystal is too hard - you need an IRON pickaxe.", 1.8, to=p)
+        if need and PICK_TIER.get(item, 0) < PICK_TIER.get(need, 99):     # better pickaxes mine everything
+            msg = NODES[n.kind].get("hard") or ("You need a pickaxe to mine that." if need == "pickaxe" else
+                                                f"{ITEMS[NODES[n.kind]['gives']]['name']} is too hard - you need an IRON pickaxe.")
+            self.say(msg, 1.8, to=p)
             self.play("mine", 0.15, to=p)
             return
         mult = w.get("harvest", {}).get(n.kind, 1) if item else 1
         got = self.harvest(n, mult)
+        self.stat(p, "gathered", sum(got.values()))
         for k, v in got.items():
             self.give(p, k, v, n.position if k == NODES[n.kind]["gives"] else None)
         if "honey" in got:
@@ -1016,7 +1103,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             by = self.players.get(s.owner)
             self.fx_layer = s.layer
             if s.kind in ("arrow", "fireball"):
-                if s.layer == "cave" and arcade.get_sprites_at_point((s.x, s.y), L.walls):
+                if s.layer != "over" and arcade.get_sprites_at_point((s.x, s.y), L.walls):
                     s.done = True
                     if s.kind == "fireball":
                         self.fireball_burst(s, by)
@@ -1076,7 +1163,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             self.say("BZZZ! The bees are angry - run, or swat them!", 2.5, to=p)
 
     def hit_enemy(self, z, dmg, by=None, fx=0.0, fy=0.0, w=None, element=None):
-        if isinstance(z, Boss) and z.state == "flee":
+        if isinstance(z, Boss) and getattr(z, "state", "") == "flee":
             return                         # it's escaping into the dawn - no cheap last hits
         element = element or (w or {}).get("element")
         if element:                        # elements.py: weaknesses and resistances
@@ -1084,6 +1171,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             dmg *= m
             self.note_element(z, element, m)
         z.hp -= dmg
+        if isinstance(z, Boss) and z.state == "flee" and z.hp > 0:
+            self.boss_hp = z.hp            # running off at dawn: it still takes the wound home with it
+            lairs.remember(self, z)
         z.flash = 0.12
         L = self.L(z)
         if isinstance(z, Zombie):
@@ -1098,6 +1188,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                 z.burn = 3.0
             if w and w.get("slow"):
                 z.chill = 3.0
+        venom.apply(z, w, by)              # venom.py: Brood Fang poison (bosses too)
         self.burst(z.center_x, z.center_y, (110, 30, 30), 7, 140, layer=z.layer)
         if z.hp <= 0:
             if isinstance(z, Boss):
@@ -1140,8 +1231,11 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         self.play("kill", 0.15, at=z.position, layer=z.layer)
         if by:
             by.kills += 1
+            self.stat(by, "zombies")
             roll = random.random()
-            if z.kind == "golem":
+            if z.kind in biomes.ZOMBIE_DROPS:          # plug-in enemies (e.g. hollows.py)
+                biomes.ZOMBIE_DROPS[z.kind](self, by, z, roll)
+            elif z.kind == "golem":
                 self.give(by, "crystal", 1, z.position)
                 self.give(by, "iron_ore", 2)
             elif z.kind == "crawler":
@@ -1149,6 +1243,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                     self.give(by, "coal", 1, z.position)
             elif z.kind == "brute":
                 self.give(by, "stone", 3, z.position)
+            elif z.kind == "drowned":
+                self.give(by, "reeds" if roll < 0.55 else "glowcap", 1, z.position)
             elif roll < 0.30:
                 self.give(by, "fiber", 1, z.position)
             elif roll < 0.42:
@@ -1164,8 +1260,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             return None
         if kind is None:
             roll = random.random()
-            if layer == "cave":
-                kind = "golem" if roll < 0.18 + 0.02 * self.day else "crawler"
+            if layer != "over":
+                kind = self.layer_zombie_kind(layer, roll)    # biomes.LAYER_INFO[layer].zombie
             else:
                 kind = "walker"
                 if self.day >= 3 and roll < 0.08 + 0.03 * self.day:
@@ -1185,10 +1281,12 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                     continue
             if not (60 < x < L.size - 60 and 60 < y < L.size - 60):
                 continue
-            z = Zombie(kind, x, y, self.next_zid, layer)
+            z = Zombie(self.biome_zombie_kind(kind, x, y, layer), x, y, self.next_zid, layer)   # biomes.py
             if arcade.check_for_collision_with_lists(z, [L.solid, L.huts]):
                 continue
-            if layer == "cave" and not arcade.get_sprites_at_point((x, y), L.ground):
+            if at is None and self.terrain_blocked(x, y, layer):     # not in a river / inside a cliff
+                continue
+            if layer != "over" and not arcade.get_sprites_at_point((x, y), L.ground):
                 continue
             self.next_zid += 1
             self.add_zombie(z)
@@ -1215,17 +1313,18 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         self.burst(p.sprite.center_x, p.sprite.center_y, (200, 40, 40), 6, 120, layer=p.layer)
 
     # ------------------------------------------------------------------ bosses
-    def spawn_boss(self):
-        n = self.boss_num
-        kind = BOSS_ORDER[n % len(BOSS_ORDER)]
-        cycle = n // len(BOSS_ORDER)
+    def spawn_boss(self, kind=None, at=None):
+        """A boss rises: `kind` at `at` (woken at its lair, lairs.py), or with no kind the next unbeaten one
+        near the survivors (it woke by itself and came for them). Its lair says how tough and how hurt it is."""
+        kind = kind or lairs.next_kind(self)
+        cycle = lairs.cycle(self, kind)
         alive = self.alive_players("over")
         anchor = random.choice(alive).pos if alive else self.base_spot()
-        b = None
-        for i in range(30):
+        b = Boss(kind, at[0], at[1], self.next_bid, cycle) if at else None
+        for i in range(0 if at else 30):
             a = random.uniform(0, math.tau)
             x, y = anchor[0] + math.cos(a) * 560, anchor[1] + math.sin(a) * 560
-            if not (150 < x < WORLD_SIZE - 150 and 150 < y < WORLD_SIZE - 150):
+            if not (150 < x < self.world_size - 150 and 150 < y < self.world_size - 150):
                 continue
             b = Boss(kind, x, y, self.next_bid, cycle)
             if arcade.check_for_collision_with_lists(b, [self.over.solid, self.over.huts]) and i < 25:
@@ -1236,7 +1335,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         self.next_bid += 1
         self.over.bosses.append(b)
         self.bmap[b.bid] = b
-        if self.boss_hp is not None:      # it got away last night - same boss, same wounds, no intro
+        self.boss_hp = lairs.wounds(self, kind)
+        if self.boss_hp is not None:      # it got away before - same boss, same wounds, no intro
             b.hp = min(b.max_hp, self.boss_hp)
             self.play("roar", 0.4)
             self.shake(8, 0.6)
@@ -1247,13 +1347,17 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         return b
 
     def start_retreat(self, b):
-        """Dawn: the boss turns and runs, fading into the trees, while a short cutscene says it'll be back."""
+        """Dawn: the boss turns and runs home to its lair, fading away, while a short cutscene says it got away."""
         alive = self.alive_players("over")
-        if alive:
+        lair = lairs.home(self, b.kind)
+        if lair and dist(lair, b.position) > 150:      # back home to its lair (lairs.py)
+            a = math.atan2(lair[1] - b.center_y, lair[0] - b.center_x)
+        elif alive:
             p = min(alive, key=lambda q: dist(q.pos, b.position))
             a = math.atan2(b.center_y - p.pos[1], b.center_x - p.pos[0])
         else:
             a = random.uniform(0, math.tau)
+        lairs.remember(self, b)            # its lair keeps the wounds for next time
         b.state, b.state_t, b.snared = "flee", 0.0, 0.0
         b.charge_dir = (math.cos(a), math.sin(a))
         self.play("roar", 0.35, at=b.position, layer="over")
@@ -1269,10 +1373,11 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             if b.state != "flee":
                 continue
             b.state_t += dt
+            b.flash = max(0, b.flash - dt)
             dx, dy = b.charge_dir
             speed = b.speed * 2.4 * min(1.0, b.state_t / 0.6)     # turns, then bolts
-            b.center_x = max(40, min(WORLD_SIZE - 40, b.center_x + dx * speed * dt))
-            b.center_y = max(40, min(WORLD_SIZE - 40, b.center_y + dy * speed * dt))
+            b.center_x = max(40, min(self.world_size - 40, b.center_x + dx * speed * dt))
+            b.center_y = max(40, min(self.world_size - 40, b.center_y + dy * speed * dt))
             b.heading = math.atan2(dy, dx)
             b.wobble += dt * 8
             b.angle = -math.degrees(b.heading) + math.sin(b.wobble) * 6
@@ -1313,12 +1418,14 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                     self.give(p, k, v)
         if by:
             by.kills += 1
+        self.on_boss_killed(b, by)
+        if b.state == "flee" and self.cut and self.cut.get("mode") == "retreat":
+            self.end_cutscene()            # shot down as it ran: no "it will be back" scene
         self.boss_num += 1
-        self.boss_day = self.day + self.boss_gap
+        self.boss_day = self.day + self.boss_gap     # the backstop clock starts again (lairs.py)
         self.boss_hp = None
-        gap = f"{self.boss_gap} night{'s' if self.boss_gap > 1 else ''}"
-        self.say(f"{b.info['name']} IS DEFEATED!  Everyone alive gets: {drops}.   "
-                 f"Next: {self.next_boss()['name']} in {gap}.", 9)
+        left = lairs.on_kill(self, b)      # its lair goes quiet
+        self.say(f"{b.info['name']} IS DEFEATED!  Everyone alive gets: {drops}.   {left}", 9)
         self.bmap.pop(b.bid, None)
         b.remove_from_sprite_lists()
         self.hazards = [h for h in self.hazards if h.owner is not b]
@@ -1329,6 +1436,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         dt = min(dt, 1 / 20)
         self.flame_t += dt
         self.pad.poll(dt)
+        self.fp_tick(dt)                   # firstperson.py: mouse capture, controller looking
         if self.local and self.state == "playing":
             self.local_input(dt)
         else:
@@ -1383,11 +1491,19 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                 self._update_bosses(dt)
                 self._update_hazards(dt)
                 self._update_shots(dt)
+                venom.tick(self, dt)          # venom.py: poisoned enemies take damage
+                self._update_defenses(dt)     # defenses.py: turrets shoot
                 self._update_world(dt)
+                self.update_swamp(dt)      # swamp.py: the Drowned rise at night
+                self.update_packs(dt)      # backpack.py: dropped packs - pick-ups, expiry, their zombies
+                self.biome_update(dt)      # biomes.py: every plug-in's per-frame logic
         else:
             if not self.cut:
                 self.clock += dt * self.clock_rate() * (8 if self.fast_forward else 1)
             self._client_visuals(dt)
+        self.weather_tick(dt)      # weather.py
+        if self.state == "playing":
+            self.biome_ambient(dt)     # biomes.py: the viewer's biome particles
         self._update_visuals(dt)
         if self.local:
             self.local_cameras(dt)
@@ -1408,6 +1524,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
     # --- local input -> my survivor
     def aim_world(self):
         me = self.me
+        if self.fp_on():
+            return self.fp_aim()         # firstperson.py: where you're looking
         if self.use_pad:
             return (me.sprite.center_x + math.cos(me.face) * 80, me.sprite.center_y + math.sin(me.face) * 80)
         return self.mouse_ground()   # where the mouse ray hits the 3D ground
@@ -1420,16 +1538,24 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         busy = bool(self.ui_open or self.paused or self.cut or self.intro)
         dx = (arcade.key.D in k or arcade.key.RIGHT in k) - (arcade.key.A in k or arcade.key.LEFT in k)
         dy = (arcade.key.W in k or arcade.key.UP in k) - (arcade.key.S in k or arcade.key.DOWN in k)
-        rest = arcade.key.LSHIFT in k or arcade.key.RSHIFT in k
+        shift = arcade.key.LSHIFT in k or arcade.key.RSHIFT in k
+        sprint = rest = False
         attack = self.mouse_down
         pad = self.pad
         if self.use_pad:
             if not busy:
                 if pad.left != (0, 0):
                     dx, dy = pad.left
-                rest = rest or "x" in pad.down
+                if "leftstick" in pad.pressed:      # click the left stick: sprint until you stop moving
+                    me.pad_sprint = not me.pad_sprint
+                rest = "x" in pad.down
                 attack = attack or "a" in pad.down or "rt" in pad.down
-            if pad.right != (0, 0):
+            if dx == 0 and dy == 0:
+                me.pad_sprint = False
+            sprint = me.pad_sprint
+            if self.fp_on():
+                pass                     # first person: the right stick looks around (fp_tick)
+            elif pad.right != (0, 0):
                 me.face = math.atan2(pad.right[1], pad.right[0])
             elif (dx or dy) and not busy:
                 me.face = math.atan2(dy, dx)
@@ -1439,23 +1565,45 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         if busy:
             dx = dy = 0
             attack = False
+            me.pad_sprint = False
+        if shift:              # one key: SHIFT while moving = sprint, SHIFT standing still = rest
+            if dx or dy:
+                sprint = True
+            else:
+                rest = True
+        if self.fp_on():
+            dx, dy = self.fp_move(me, dx, dy)   # firstperson.py: walk where you look
         me.move = (dx, dy)
-        me.resting = rest
+        me.resting = rest             # (holding X rests even with the stick pushed: you stop to rest)
+        me.sprinting = sprint and not rest
         me.attacking = attack and me.alive and not rest
 
     def move_player(self, p, dt):
         dx, dy = p.move
         moving = (dx or dy) and not p.resting
         speed = PLAYER_SPEED if p.energy > 0 else TIRED_SPEED
+        if self.sprint_active(p):             # backpack.py: sprinting needs energy (the host drains it)
+            speed *= SPRINT_MULT
         if p.warmth <= 0:
             speed *= 0.75
+        speed *= self.swamp_speed(p, dt)     # swamp.py: mud, bog pools, grasping roots
+        speed *= self.biome_speed(p)         # biomes.py: biome + terrain (snow, hills...)
+        speed *= 1 + p.gear("speed")         # light armor (Chitin Armor) makes you quicker
         if moving:
             n = max(1.0, math.hypot(dx, dy))
             p.sprite.change_x = dx / n * speed * dt
             p.sprite.change_y = dy / n * speed * dt
         else:
             p.sprite.change_x = p.sprite.change_y = 0
+        ox, oy = p.sprite.center_x, p.sprite.center_y
         p.physics.update()
+        if biomes.with_hook("blocked") and self.terrain_blocked(p.sprite.center_x, p.sprite.center_y, p.layer):
+            if not self.terrain_blocked(p.sprite.center_x, oy, p.layer):     # slide along cliffs / rivers
+                p.sprite.center_y = oy
+            elif not self.terrain_blocked(ox, p.sprite.center_y, p.layer):
+                p.sprite.center_x = ox
+            else:
+                p.sprite.center_x, p.sprite.center_y = ox, oy
         size = self.layers[p.layer].size
         p.sprite.center_x = max(20, min(size - 20, p.sprite.center_x))
         p.sprite.center_y = max(20, min(size - 20, p.sprite.center_y))
@@ -1466,23 +1614,24 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         self.fast_forward = everyone_down and self.is_night
         self.clock += dt * self.clock_rate() * (8 if self.fast_forward else 1)
         p = self.phase
+        backstop = self.boss_night and not self.over.bosses     # lairs.py: nobody woke one for too long
         if before < DUSK_START <= p:
-            if self.boss_night and self.boss_hp is not None:
-                self.say(f"{self.next_boss()['name']} is coming back tonight. Finish it!", 6)
-            elif self.boss_night:
-                self.say("The ground trembles... something BIG is coming tonight. Get ready!", 6)
+            if backstop:
+                self.say(f"The ground trembles... {self.next_boss()['name']} has woken by itself - "
+                         "and it's coming for you tonight. Get ready!", 7)
             else:
                 self.say("Dusk... they're coming. Build walls, light a fire, or get to a hut.", 5)
-        if before < NIGHT_START <= p and self.boss_night and not self.over.bosses:
+        if before < NIGHT_START <= p and backstop:
             self.spawn_boss()
+            self.boss_day = self.day + self.boss_gap
         if before < DAWN_START <= p:
             self.say("Dawn breaks - the dead burn in the sunlight.", 4)
             for b in list(self.over.bosses):
                 if b.state == "flee":
                     continue
-                self.boss_hp = b.hp            # it remembers every hit
-                self.boss_day = self.day + 1   # ...and comes back tomorrow night
-                self.say(f"{b.info['name']} retreats ({int(b.hp)}/{int(b.max_hp)})... it will be back tomorrow night.", 7)
+                self.boss_hp = b.hp            # it remembers every hit (so does its lair: start_retreat)
+                self.say(f"{b.info['name']} retreats ({int(b.hp)}/{int(b.max_hp)}) to its lair... "
+                         "wake it again when you're ready.", 7)
                 self.start_retreat(b)
             self.hazards = []
             self.cold_mult = 1.0
@@ -1492,10 +1641,12 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         if p < before:
             self.day += 1
             tonight = ""
-            if self.boss_night:
-                tonight = (f"  Tonight {self.next_boss()['name']} returns." if self.boss_hp is not None
-                           else "  Tonight a BOSS rises.")
+            if self.boss_night and not self.over.bosses:
+                tonight = f"  The lairs are restless: tonight {self.next_boss()['name']} wakes by itself."
+            elif self.boss_day == self.day + 1:
+                tonight = "  The ground rumbles... a boss will wake by itself TOMORROW night."
             self.say(f"Day {self.day}. You survived the night." + tonight, 5)
+            self.on_new_day()    # progress.py: +1 night survived for everyone
             self.save_game()     # autosave every morning
         n_over = len(self.alive_players("over"))
         if self.is_night and n_over:
@@ -1505,15 +1656,18 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                 self.spawn_zombie("over")
                 self.over.spawn_timer = max(0.7, 3.2 - 0.35 * self.day) * random.uniform(0.6, 1.3) / \
                     (1 + 0.5 * (n_over - 1))
-        n_cave = len(self.alive_players("cave"))
-        if n_cave:
-            self.cave.spawn_timer -= dt
-            if self.cave.spawn_timer <= 0 and len(self.cave.zombies) < 5 + 3 * n_cave + self.day:
-                self.spawn_zombie("cave")
-                self.cave.spawn_timer = random.uniform(2.5, 5.0) / n_cave
+        for L in self.layers.values():          # underground layers (cave, deep...): always dark, always hungry
+            if L.name == "over":
+                continue
+            n_cave = len(self.alive_players(L.name))
+            if n_cave:
+                L.spawn_timer -= dt
+                if L.spawn_timer <= 0 and len(L.zombies) < 5 + 3 * n_cave + self.day:
+                    self.spawn_zombie(L.name)
+                    L.spawn_timer = random.uniform(2.5, 5.0) / n_cave
 
     def base_spot(self):
-        for kind in ("hut", "storage", "workbench"):
+        for kind in ("base_flag", "hut", "storage", "workbench"):
             for s in self.structs.values():
                 if s.kind == kind and s.layer == "over":
                     return (s.center_x, s.center_y - 70)
@@ -1532,26 +1686,39 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         p.tp += 1
         p.respawn_t = -1
         self.say(f"{p.name} is back on their feet!", 3)
-        self.say("You're back at your base with empty pockets. Check the team storage!", 5, to=p)
+        if self.pack_of(p):          # backpack.py
+            self.say("You're back at your base. Your backpack lies where you fell - follow the arrow!", 6, to=p)
+        else:
+            self.say("You're back at your base with empty pockets. Check the team storage!", 5, to=p)
 
     def down_player(self, p):
         p.alive = False
         p.health = 0
         p.attacking = False
+        self.stat(p, "downed")
         p.sprite.visible = False
         p.held.visible = False
         self.burst(p.sprite.center_x, p.sprite.center_y, (200, 40, 40), 24, 160, 4, 0.8, layer=p.layer)
         self.play("die", 0.4, to=p)
-        lost = sum(p.inv.values()) + sum(1 for v in p.equip.values() if v)
+        dropped, old_lost = self.drop_pack(p)     # backpack.py: it all lies where you fell (an older pack is lost)
         p.inv = {}
         p.hotbar = [None] * HOTBAR_SLOTS
         p.equip = {s: None for s in ARMOR_SLOTS}
+        p.sprinting = p.pad_sprint = False
         night = DUSK_START <= self.phase < DAWN_START
         p.respawn_t = -1.0 if night else float(DAY_RESPAWN_SECONDS)
         when = "at dawn" if night else f"in {DAY_RESPAWN_SECONDS} seconds"
-        self.say(f"YOU DIED - and lost everything you carried ({lost} items). You'll be back {when}.", 7, to=p)
-        if len(self.players) > 1:
+        old = "  Your old backpack is lost for good." if old_lost else ""
+        if len(self.players) > 1:    # (first, so on the host's own screen their own message wins)
             self.say(f"{p.name} died! They'll be back {when}.", 4)
+        if not dropped:
+            self.say(f"YOU DIED - with nothing on you. You'll be back {when}.{old}", 7, to=p)
+        elif night:
+            self.say(f"YOU DIED - your backpack lies where you fell. Back at dawn - then you have one day to get it!"
+                     f"{old}", 8, to=p)
+        else:
+            self.say(f"YOU DIED - your backpack lies where you fell. Back in {DAY_RESPAWN_SECONDS}s - get it before "
+                     f"dawn!{old}", 8, to=p)
 
     def _update_survivor(self, p, dt):
         if not p.alive:
@@ -1584,8 +1751,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
 
         p.hunger -= HUNGER_DECAY_PER_SEC * dt
         p.thirst -= THIRST_DECAY_PER_SEC * dt
-        if moving:
-            p.energy -= ENERGY_DECAY_PER_SEC * dt
+        if self.sprint_active(p):    # walking is free; sprinting wears you out (backpack.py)
+            p.energy -= SPRINT_ENERGY_PER_SEC * dt
         if p.resting:
             boost = 2.0 if p.in_hut else 1.5 if fire else 1.0
             p.energy += REST_RESTORE_PER_SEC * boost * dt
@@ -1601,10 +1768,12 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             p.health += NATURAL_REGEN_PER_SEC * dt
 
         # temperature: night and caves are cold; fire, huts, torches and clothes keep you warm
-        if p.layer == "cave":
-            cold = CAVE_COLD_PER_SEC
+        if p.layer != "over":
+            cold = self.layer_cold(p.layer)      # biomes.LAYER_INFO (the cave: CAVE_COLD_PER_SEC)
         else:
             cold = COLD_PER_SEC * self.darkness * self.cold_mult
+        cold += self.weather_survivor(p, dt)   # weather.py: winter nights, snow, rain
+        cold += self.biome_survivor(p, dt)     # biomes.py: tundra chill, ash heat, hazards...
         cold = max(0.0, cold - p.gear("warmth") * WARMTH_PER_GEAR_POINT)
         warm = 0.0
         if self.near_fire(p.pos, p.layer):
@@ -1648,8 +1817,13 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             s.center_y += oy / d * step
             return hit_now, 0.0
         blocked, moved = [], 0.0
+        land = bool(blockers) and bool(biomes.with_hook("blocked"))   # rivers / cliffs (biomes.py terrain hooks)
+        if land and self.body_blocked(s, s.center_x, s.center_y):
+            land = False                       # already in the water (spawned / knocked there): let it out
         s.center_x += mvx
         hit = arcade.check_for_collision_with_lists(s, blockers)
+        if not hit and land and self.body_blocked(s, s.center_x, s.center_y):
+            hit = [biomes]                     # stopped by the land itself (not a Structure)
         if hit:
             s.center_x -= mvx
             blocked += hit
@@ -1657,11 +1831,17 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             moved += abs(mvx)
         s.center_y += mvy
         hit = arcade.check_for_collision_with_lists(s, blockers)
+        if not hit and land and self.body_blocked(s, s.center_x, s.center_y):
+            hit = [biomes]
         if hit:
             s.center_y -= mvy
             blocked += hit
         else:
             moved += abs(mvy)
+        if land and biomes in blocked and getattr(s, "detour", 1) <= 0:
+            d = self.body_detour(s, mvx, mvy)     # e.g. terrain.py: head for the nearest ford / bridge
+            if d:
+                s.detour_dir, s.detour = d, 1.3
         return blocked, moved
 
     def _update_zombies(self, L, dt):
@@ -1672,14 +1852,17 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         day_burn = L.name == "over" and not self.is_night and self.darkness < 0.5
         fires = [s for s in L.builds if s.kind in LIGHT_SOURCES and s.lit]
         guards = [a for a in L.animals if a.pet and a.info["job"] == "guard"]
-        blockers = [L.solid, L.huts]
+        blockers = [L.solid, L.huts] + self.defense_blockers(L)
         zl = list(L.zombies)
         for z in zl:
             tgt = min(alive, key=lambda p: dist(p.pos, z.position)) if alive else None
-            ppos = tgt.pos if tgt else z.position
+            goal = self.pack_loiter(z, tgt)   # backpack.py: zombies drawn to a dropped pack hang around it
+            if goal is not None:
+                tgt = None
+            ppos = goal or (tgt.pos if tgt else z.position)
             dx, dy = ppos[0] - z.center_x, ppos[1] - z.center_y
             d = math.hypot(dx, dy) or 1
-            vx, vy = (dx / d, dy / d) if tgt else (0.0, 0.0)
+            vx, vy = (dx / d, dy / d) if (tgt or goal) else (0.0, 0.0)
             if z.kind not in ("brute", "golem"):
                 for f in fires:
                     fd = dist(f.position, z.position)
@@ -1703,6 +1886,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                 n = math.hypot(vx, vy) or 1
                 vx, vy = vx / n, vy / n
             step = z.speed * dt * (0.5 if z.chill > 0 else 1) * (0 if z.snared > 0 else 1)
+            step *= self.defense_slow(z)     # defenses.py: lanterns slow them down
             blocked_by, moved = self.step_body(z, vx * step, vy * step, blockers)
             nature = [b for b in blocked_by if not isinstance(b, Structure)]
             if nature and moved < step * 0.35 and z.detour <= 0:
@@ -1749,7 +1933,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                 z.hp -= 2.0 * dt
                 if random.random() < 0.4:
                     self.burst(z.center_x, z.center_y, (255, 140, 40), 1, 50, 3, 0.5)
-            if day_burn and z.kind not in ("golem", "crawler"):
+            if day_burn and z.kind not in ("golem", "crawler") and not explore.shaded(z):   # a place's guard
                 z.hp -= SUN_BURN_PER_SEC * dt
                 if random.random() < 0.3:
                     self.burst(z.center_x, z.center_y, (90, 90, 90), 1, 40, 4, 0.8)
@@ -1769,16 +1953,18 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
     # ------------------------------------------------------------------ animals & pets
     def spawn_animal(self):
         alive = self.alive_players("over")
-        weights = {"rabbit": 5, "deer": 3, "boar": 3, "wolf": 2, "bee": 4}
-        kind = random.choices(list(ANIMALS), [weights.get(k, 2) for k in ANIMALS])[0]
-        if kind == "bee":
-            return self.spawn_bee(alive)
+        S = self.world_size
         for _ in range(20):
-            x, y = random.uniform(150, WORLD_SIZE - 150), random.uniform(150, WORLD_SIZE - 150)
-            if any(dist((x, y), p.pos) < 550 for p in alive):
+            x, y = random.uniform(150, S - 150), random.uniform(150, S - 150)
+            if any(dist((x, y), p.pos) < 550 for p in alive) or self.in_base((x, y)):
                 continue
+            weights = self.animal_weights((x, y))      # biomes.py: each biome has its own wildlife
+            kind = random.choices(list(ANIMALS), [weights.get(k, 2) for k in ANIMALS])[0]
+            if kind == "bee":
+                return self.spawn_bee(alive)
             a = Animal(kind, x, y, self.next_aid)
-            if arcade.check_for_collision_with_lists(a, [self.over.solid, self.over.huts]):
+            if arcade.check_for_collision_with_lists(a, [self.over.solid, self.over.huts]) or \
+                    self.body_blocked(a, x, y):          # not in a river / inside a cliff
                 continue
             self.next_aid += 1
             self.over.animals.append(a)
@@ -1810,7 +1996,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         self.animal_t -= dt
         if self.animal_t <= 0:
             self.animal_t = 4.0
-            if len(wild) < ANIMAL_CAP and not self.is_night:
+            if len(wild) < self.animal_cap and not self.is_night:
                 self.spawn_animal()
         blockers = [L.solid, L.huts]
         players_over = self.alive_players("over")
@@ -1836,8 +2022,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                     a.detour_dir = (-vy * side, vx * side)
                     a.detour = random.uniform(0.4, 0.9)
                 a.heading = math.atan2(vy, vx)
-                a.center_x = max(40, min(WORLD_SIZE - 40, a.center_x))
-                a.center_y = max(40, min(WORLD_SIZE - 40, a.center_y))
+                a.center_x = max(40, min(self.world_size - 40, a.center_x))
+                a.center_y = max(40, min(self.world_size - 40, a.center_y))
             a.angle = -math.degrees(a.heading)
             if not a.pet and self.is_night and self.darkness > 0.9 and random.random() < dt * 0.01:
                 self.amap.pop(a.aid, None)   # wild animals slowly bed down for the night
@@ -2052,6 +2238,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                     b.state = "walk"
                     self.burst(b.center_x, b.center_y, (200, 230, 255), 26, 200, 4, 0.8)
                     self.play("laser", 0.4, at=b.position, layer="over")
+            elif b.state == "submerge":      # swamp.py: the Mire Lurker under the mud
+                speed = 0
+                self.mire_submerge(b, dt, alive)
             else:
                 self._boss_abilities(b, tgt, alive, d)
             b.snared = max(0, b.snared - dt)
@@ -2078,7 +2267,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                     b.center_x += vx * step
                     b.center_y += vy * step
                 else:
-                    blocked, moved = self.step_body(b, vx * step, vy * step, [L.solid, L.huts])
+                    blocked, moved = self.step_body(b, vx * step, vy * step, [L.solid, L.huts] + self.defense_blockers(L))
                     built = [s for s in blocked if isinstance(s, Structure)]
                     if built and b.timers.get("smash", 0) <= 0:
                         smash = 80 if b.state == "charge" else (60 if b.kind == "titan" else 30)
@@ -2088,8 +2277,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                     elif blocked and not built:   # shoulder through trees and rocks
                         b.center_x += vx * step * 0.6
                         b.center_y += vy * step * 0.6
-                b.center_x = max(80, min(WORLD_SIZE - 80, b.center_x))
-                b.center_y = max(80, min(WORLD_SIZE - 80, b.center_y))
+                b.center_x = max(80, min(self.world_size - 80, b.center_x))
+                b.center_y = max(80, min(self.world_size - 80, b.center_y))
                 if vx or vy:
                     b.heading = math.atan2(vy, vx)
             b.angle = -math.degrees(b.heading) + math.sin(b.wobble) * 3
@@ -2147,8 +2336,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             elif T["b"] <= 0:
                 T["b"] = 9.0
                 behind = tgt.face + math.pi
-                tx = max(100, min(WORLD_SIZE - 100, tgt.pos[0] + math.cos(behind) * 90))
-                ty = max(100, min(WORLD_SIZE - 100, tgt.pos[1] + math.sin(behind) * 90))
+                tx = max(100, min(self.world_size - 100, tgt.pos[0] + math.cos(behind) * 90))
+                ty = max(100, min(self.world_size - 100, tgt.pos[1] + math.sin(behind) * 90))
                 b.state, b.state_t, b.target = "blink", 0.8, (tx, ty)
                 self.hazards.append(Hazard("mist", tx, ty, 60, tele=0.8, owner=b))
         elif kind == "colossus":
@@ -2167,12 +2356,17 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                 b.charge_dir = (math.cos(a), math.sin(a))
                 b.state, b.state_t = "windup", 1.0
                 self.hazards.append(Hazard("line", b.center_x, b.center_y, 56, tele=1.0, a=a, ln=440, owner=b))
+        elif kind == "mire":
+            self.mire_abilities(b, tgt, alive, d)     # swamp.py
 
     def _update_hazards(self, dt):
         self.fx_layer = "over"
         alive = self.alive_players("over")
         new = []
         for h in self.hazards:
+            if h.kind in self.SWAMP_HAZARDS:     # swamp.py
+                new += self.swamp_hazard(h, dt, alive)
+                continue
             if h.tele > 0:
                 h.tele -= dt
                 if h.kind == "line" and h.owner is not None:
@@ -2241,21 +2435,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         return []
 
     def _update_world(self, dt):
-        ppl = [(p.pos, p.layer) for p in self.players.values()]
-
-        def far(n):
-            return all(dist(n.position, q) > 150 for q, ly in ppl if ly == n.layer)
-
         for n in self.over.trees:
-            if n.state == "stump":
-                n.timer -= dt
-                if n.timer <= 0 and far(n):
-                    n.hp = TREE_HP
-                    self.set_node_state(n, "full")
-                    if n.hive:   # the bees move back in, the honey takes a while
-                        self.set_node_state(n.hive, "empty")
-                        n.hive.timer = HIVE_REGROW
-            elif n.kind == "hive" and n.state == "empty":
+            if n.kind == "hive" and n.state == "empty":
                 n.timer -= dt
                 if n.timer <= 0:
                     self.set_node_state(n, "full")
@@ -2264,15 +2445,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                 n.timer -= dt
                 if n.timer <= 0:
                     self.set_node_state(n, "full")
-        for item in list(self.regrow):
-            item[0] -= dt
-            n = item[1]
-            L = self.layers[n.layer]
-            if item[0] <= 0 and far(n) and not arcade.check_for_collision_with_lists(n, [L.zombies,
-                                                                                          self.player_list]):
-                n.hp = NODES[n.kind]["hp"]
-                self.set_node_state(n, "full")
-                self.regrow.remove(item)
+        self.update_respawns(dt)     # base.py: used-up nodes turn up again somewhere new (never in a base)
 
     def _update_visuals(self, dt):
         view = self.view_pos()
@@ -2285,6 +2458,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                     if n.shake > 0:
                         n.shake -= dt
                         n.center_x = n.base[0] + (math.sin(n.shake * 70) * 3 if n.shake > 0 else 0)
+        self.defense_visuals(dt)
         for b in self.structs.values():
             if b.flash > 0:
                 b.flash -= dt
@@ -2319,6 +2493,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                 p.held.center_x = p.sprite.center_x + math.cos(a) * 26
                 p.held.center_y = p.sprite.center_y + math.sin(a) * 26
                 p.held.angle = -math.degrees(a)
+        self.swamp_visuals(dt)       # swamp.py: glowcaps, fireflies
+        self.sprint_visuals(dt)      # backpack.py: dust behind sprinters
 
     def _update_camera(self, dt):
         vx, vy = self.view_pos()
@@ -2386,10 +2562,10 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                         break
                     name = str(m.get("name", "Friend"))[:12] or "Friend"
                     p = self.add_player(name, conn=c)
-                    if self.me:
+                    if self.me and not p.restored:     # a returning survivor stays where they were saved
                         self.set_layer(p, self.me.layer, (self.view_pos()[0] + 40, self.view_pos()[1]))
-                        p.tp += 1      # tell their game where they are (and on which layer)
-                    c.send({"t": "world", "seed": self.seed, "pid": p.id})
+                    p.tp += 1      # tell their game where they are (and on which layer)
+                    c.send({"t": "world", "seed": self.seed, "pid": p.id, "wg": self.worldgen})   # clients rebuild it
                     self.sent_nodes_ver = self.sent_struct_ver = self.sent_storage_ver = -1
                     self.say(f"{name} joined the game!", 3)
                     self.play("craft", 0.3)
@@ -2404,20 +2580,26 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                 self.remove_player(p)
                 continue
             for m in p.conn.receive():
-                self.host_message(p, m)
+                try:
+                    self.host_message(p, m)
+                except (KeyError, ValueError, TypeError, AttributeError, OverflowError):
+                    pass       # a broken / modified client's message never takes the host down
         self.server.players = len(self.players)
 
     def host_message(self, p, m):
         t = m.get("t")
         if t == "in":
-            if m.get("tp") == p.tp and p.alive:
-                p.sprite.position = (float(m["x"]), float(m["y"]))
-            p.face = float(m.get("f", 0))
-            p.move = (float(m.get("mx", 0)), float(m.get("my", 0)))
+            size = self.layers[p.layer].size
+            x, y = net.num(m.get("x"), None, 0, size), net.num(m.get("y"), None, 0, size)
+            if m.get("tp") == p.tp and p.alive and x is not None and y is not None:
+                p.sprite.position = (x, y)
+            p.face = net.num(m.get("f"), p.face)
+            p.move = (net.num(m.get("mx"), 0, -1, 1), net.num(m.get("my"), 0, -1, 1))
             p.resting = bool(m.get("r"))
+            p.sprinting = bool(m.get("sp")) and not p.resting   # a flag only: the host sets the speed / energy
             p.attacking = bool(m.get("a")) and p.alive and not self.cut
             p.arriving = bool(m.get("ar"))
-            p.selected = max(0, min(HOTBAR_SLOTS - 1, int(m.get("s", 0))))
+            p.selected = net.whole(m.get("s"), p.selected, 0, HOTBAR_SLOTS - 1)
         elif t == "act" and self.state == "playing":
             self.do_action(p, m.get("a"), m)
 
@@ -2429,11 +2611,12 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             return
         self.fx_layer = p.layer
         try:
+            size = self.layers[p.layer].size
             if a == "place":
-                p.selected = max(0, min(HOTBAR_SLOTS - 1, int(kw.get("s", p.selected))))
-                self.place(p, (float(kw["x"]), float(kw["y"])))
+                p.selected = net.whole(kw.get("s"), p.selected, 0, HOTBAR_SLOTS - 1)
+                self.place(p, (net.num(kw["x"], -1e6, -1e6, 1e6), net.num(kw["y"], -1e6, -1e6, 1e6)))
             elif a == "craft":
-                self.craft(p, int(kw.get("i", -1)))
+                self.craft(p, net.whole(kw.get("i"), -1))
             elif a == "use" and kw.get("item") in ITEMS:
                 self.consume(p, kw["item"])
             elif a == "quick":
@@ -2441,15 +2624,16 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             elif a == "interact":
                 self.interact(p)
             elif a == "assign" and kw.get("item") in ITEMS:
-                self.assign_hotbar(p, kw["item"], kw.get("s"))
+                s = kw.get("s")
+                self.assign_hotbar(p, kw["item"], None if s is None else net.whole(s, p.selected, 0, HOTBAR_SLOTS - 1))
             elif a == "unequip" and kw.get("slot") in ARMOR_SLOTS:
                 self.unequip(p, kw["slot"])
             elif a == "deposit" and kw.get("item") in ITEMS:
-                self.deposit(p, kw["item"], kw.get("n", 1))
+                self.deposit(p, kw["item"], net.whole(kw.get("n", 1), 0, 0, 10 ** 9))
             elif a == "withdraw" and kw.get("item") in ITEMS:
-                self.withdraw(p, kw["item"], kw.get("n", 1))
+                self.withdraw(p, kw["item"], net.whole(kw.get("n", 1), 0, 0, 10 ** 9))
             elif a == "tame":
-                self.tame(p, int(kw.get("aid", -1)))
+                self.tame(p, net.whole(kw.get("aid"), -1))
             elif a == "pets":
                 self.command_pets(p)
             elif a == "spellnext":
@@ -2457,19 +2641,21 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             elif a in ("petmode", "petname", "petarmor", "petsall"):
                 self.pet_action(p, a, kw)      # pets.py: only ever touches your own pets
             elif a == "throw":
-                p.selected = max(0, min(HOTBAR_SLOTS - 1, int(kw.get("s", p.selected))))
+                p.selected = net.whole(kw.get("s"), p.selected, 0, HOTBAR_SLOTS - 1)
                 it = p.hotbar[p.selected]
-                if it and ITEMS[it]["kind"] == "throw":
-                    self.throw(p, it, float(kw["x"]), float(kw["y"]))
-        except (KeyError, ValueError, TypeError):
+                x, y = net.num(kw.get("x"), None, 0, size), net.num(kw.get("y"), None, 0, size)
+                if it and ITEMS[it]["kind"] == "throw" and x is not None and y is not None:
+                    self.throw(p, it, x, y)
+        except (KeyError, ValueError, TypeError, AttributeError, OverflowError):
             pass
 
     def send_snapshots(self):
         li = LAYERS.index
         common = {
             "t": "snap", "c": r1(self.clock), "d": self.day, "k": self.kills, "g": self.state,
-            "ff": int(self.fast_forward), "cm": self.cold_mult, "dn": list(self.difficulty),
+            "ff": int(self.fast_forward), "cm": self.cold_mult, "dn": list(self.difficulty), "wx": self.weather_net(),
             "bd": [self.boss_day, self.boss_num, int(self.boss_hp is not None)],
+            "lr": lairs.net_rows(self),     # lairs.py: each lair's state
             "sh": [[s.kind, r1(s.x), r1(s.y), r1(s.vx), r1(s.vy), round(s.t, 2), round(s.T, 2), li(s.layer)]
                    for s in self.shots],
             "p": [[p.id, p.name, r1(p.sprite.center_x), r1(p.sprite.center_y), round(p.face, 2), int(p.health),
@@ -2488,6 +2674,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         }
         if self.nodes_ver != self.sent_nodes_ver:
             common["n"] = "".join(NODE_CODE[n.state] for n in self.nodes)
+            moves = self.node_moves_rows(force=self.sent_nodes_ver == -1)   # base.py: nodes that grew elsewhere
+            if moves is not None:
+                common["nm"] = moves
             self.sent_nodes_ver = self.nodes_ver
         if self.struct_ver != self.sent_struct_ver:
             common["st"] = [[s.sid, s.kind, s.center_x, s.center_y, round(s.hp, 1), li(s.layer), int(s.lit)]
@@ -2496,6 +2685,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         if self.storage_ver != self.sent_storage_ver:
             common["sto"] = self.storage
             self.sent_storage_ver = self.storage_ver
+        common["bp"] = self.packs_net()           # backpack.py: where the dropped packs are
+        common["spr"] = [p.id for p in self.players.values() if self.sprint_active(p)]
         common["eq"] = {str(p.id): [p.equip.get(s) or "" for s in ARMOR_SLOTS] for p in self.players.values()}
         self.events_all = []
         for p in self.players.values():
@@ -2546,7 +2737,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                 return
             if t == "world":
                 note = self.menu_note
-                self.setup(int(m["seed"]))
+                self.setup(int(m["seed"]), int(m.get("wg", biomes.LEGACY)))   # an older host: the legacy map
                 self.my_pid = int(m["pid"])
                 self.state = "playing"
                 self.menu_note = note
@@ -2563,12 +2754,16 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         self.day, self.kills = m["d"], m["k"]
         self.fast_forward = bool(m.get("ff"))
         self.cold_mult = m.get("cm", 1.0)
+        self.weather_apply(m.get("wx"))
         if "dn" in m:
             self.difficulty = tuple(m["dn"])
         if "bd" in m:
             self.boss_day, self.boss_num = m["bd"][0], m["bd"][1]
             self.boss_hp = 1 if m["bd"][2] else None
-        self.shots = self.merge_shots(m.get("sh", []))     # spells.py
+        lairs.net_apply(self, m.get("lr"))
+        self.shots = self.merge_shots(m.get("sh", []))     # spells.py: quick shots stay visible
+        if "nm" in m:
+            self.apply_node_moves(m["nm"])     # base.py: before the states, so regrown trees get the right look
         if "n" in m:
             for n, ch in zip(self.nodes, m["n"]):
                 self.set_node_state(n, CODE_NODE.get(ch, "full"))
@@ -2613,6 +2808,10 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             self.seen_swings[pid] = swings
         for pid in [k for k in self.players if k not in seen]:
             self.remove_player(self.players[pid])
+        self.packs_apply(m.get("bp"))      # backpack.py
+        sprinting = set(m.get("spr") or [])
+        for p in self.players.values():
+            p.sprint_seen = p.id in sprinting
         for pid, eq in m.get("eq", {}).items():    # what everyone else is wearing
             other = self.players.get(int(pid))
             if other is not None and other is not self.me:
@@ -2734,7 +2933,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             return
         self.conn.send({"t": "in", "x": r1(me.sprite.center_x), "y": r1(me.sprite.center_y), "f": round(me.face, 3),
                         "mx": round(me.move[0], 2), "my": round(me.move[1], 2), "r": int(me.resting),
-                        "a": int(me.attacking), "s": me.selected, "tp": me.tp, "ar": int(bool(self.intro))},
+                        "sp": int(me.sprinting), "a": int(me.attacking), "s": me.selected, "tp": me.tp, "ar": int(bool(self.intro))},
                        droppable=True)
 
     def action(self, a, **kw):
@@ -2748,8 +2947,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         self.do_action(self.me, a, kw)
 
     def leave_game(self, note=""):
-        if self.can_save():
-            self.save_game()      # autosave on the way out
+        summary = self.run_summary()      # progress.py: grab the stats before the world goes
+        self.save_on_exit()       # autosave on the way out
         self.local_end()
         if self.conn:
             self.conn.close()
@@ -2761,11 +2960,15 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         self.menu = "main"
         self.menu_note = note
         self.setup(random.randrange(1 << 30))
+        self.show_summary(summary)
 
     # ------------------------------------------------------------------ starting
     def start(self, save=None):
         """Start a game: a brand new one, or (with `save`) a saved one picked on the title screen."""
-        self.setup(save["seed"] if save else random.randrange(1 << 30))
+        if save:     # saves from before worldgen versions have no "worldgen": the legacy map, exactly
+            self.setup(save["seed"], int(save.get("worldgen", biomes.LEGACY)))
+        else:
+            self.setup(random.randrange(1 << 30))
         self.away = {}
         self.save_path = None
         if save:
@@ -2780,7 +2983,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             self.intro = None
             self.state = "playing"
             self.say(f"Welcome back - Day {self.day}.  ({self.difficulty[0]}: {self.difficulty[1]}s day, "
-                     f"{self.difficulty[2]}s night, a boss every {self.boss_gap} nights)", 5)
+                     f"{self.difficulty[2]}s night, bosses wake on their own after {self.boss_gap} nights)", 5)
             if self.net == "host":
                 self.say(f"Hosting your saved game! Friends: Join -> pick '{self.my_name}'. "
                          "Use the same name as last time to get your stuff back.", 8)
@@ -2792,7 +2995,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         else:
             self.intro = intro.Intro(self.my_name, "host")
             self.state = "playing"
-        for _ in range(ANIMAL_CAP // 2):
+        for _ in range(self.animal_cap // 2):
             self.spawn_animal()
 
     def end_intro(self):
@@ -2851,6 +3054,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             else:
                 self.paused = not self.paused
             return
+        if self.ui_scroll_key(key):        # ui.py: UP / DOWN / PAGE keys scroll crafting & pets
+            return
         if self.ui_open == "inv" and key in (arcade.key.LEFT, arcade.key.RIGHT):
             self.craft_tab = (self.craft_tab + (1 if key == arcade.key.RIGHT else -1)) % len(CRAFT_TABS)
             return
@@ -2871,6 +3076,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             self.interact_key()
         elif key == arcade.key.F:
             self.action("pets")
+        elif key == arcade.key.V:
+            self.fp_toggle()             # firstperson.py
 
     def interact_key(self):
         me = self.me
@@ -2896,7 +3103,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             step = 30 if modifiers & arcade.key.MOD_SHIFT else 5
             self.diff_adjust(self.menu_sel, step if key in (arcade.key.RIGHT, arcade.key.D) else -step)
             return
-        if key == arcade.key.ESCAPE and self.menu in ("diff", "load", "save", "confirm"):
+        if key == arcade.key.ESCAPE and self.menu in ("diff", "load", "save", "confirm", "ach", "summary", "gfx"):
             self.menu_back()
             return
         if self.menu == "load" and key in (arcade.key.DELETE, arcade.key.BACKSPACE):
@@ -2938,6 +3145,9 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         self.keys.discard(key)
 
     def on_mouse_motion(self, x, y, dx, dy):
+        if self.fp_mouse(dx, dy):          # firstperson.py: mouse looks around
+            self.use_pad = False
+            return
         x, y = self.to_layout(x, y)      # fullscreen: undo the scaling (options.py)
         self.mouse_screen = (x, y)
         if abs(dx) + abs(dy) > 2:
@@ -2948,6 +3158,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                     self.menu_sel = i
 
     def on_mouse_drag(self, x, y, dx, dy, buttons, modifiers):
+        if self.fp_mouse(dx, dy):          # firstperson.py: keep looking while you hold attack
+            return
         self.mouse_screen = self.to_layout(x, y)
 
     def on_mouse_press(self, x, y, button, modifiers):
@@ -3015,7 +3227,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         elif kind == "build":
             tx, ty = self.aim_world()
             self.action("place", x=tx, y=ty, s=self.me.selected)
-        elif kind == "food":
+        elif kind in ("food", "seed"):
             self.action("use", item=sel)
         elif kind == "throw":
             me = self.me
@@ -3036,6 +3248,8 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             return
         if self.state == "playing" and not self.ui_open and self.me and scroll_y:
             self.me.selected = (self.me.selected - int(math.copysign(1, scroll_y))) % HOTBAR_SLOTS
+        elif self.state == "playing" and self.ui_open and scroll_y:
+            self.ui_scroll(-int(math.copysign(1, scroll_y)))     # ui.py: scroll the crafting / pets list
 
     # --- controller
     def handle_pad(self, dt):
@@ -3088,7 +3302,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
                     self._stick_x = 0.2
                 elif abs(lx) < 0.3:
                     self._stick_x = 0
-            if "b" in pr and self.menu in ("diff", "load", "save", "confirm"):
+            if "b" in pr and self.menu in ("diff", "load", "save", "confirm", "ach", "summary", "gfx"):
                 self.menu_back()
                 return
             if "x" in pr and self.menu == "load":
@@ -3109,9 +3323,13 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             elif "x" in pr:
                 self.save_game(manual=True)
             return
+        if self.rename_pad(pr):            # pets.py: controller typing a pet's name
+            return
         if "start" in pr:
             self.paused = True
             return
+        if "rightstick" in pr:
+            self.fp_toggle()             # firstperson.py
         me = self.me
         if not me:
             return
@@ -3129,6 +3347,7 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
             self.mouse_screen = (mx, my)
             if "a" in pr:
                 self.click(mx, my, arcade.MOUSE_BUTTON_LEFT)
+            self.ui_scroll_pad(pad, dt)      # ui.py: right stick scrolls long lists
             if self.ui_open == "inv":
                 if "lt" in pr:
                     self.craft_tab = (self.craft_tab - 1) % len(CRAFT_TABS)
@@ -3152,7 +3371,10 @@ class LastLight(local_coop.LocalCoop, view3d.View3D, options.Options, spells.Spe
         if "dpdown" in pr:
             self.action("pets")
         if "b" in pr:
-            if self.near_storage(me) or self.near_exit(me) or self.near_pond(me):
+            pk = self.pack_of(me)       # backpack.py: B next to your pack picks it up
+            at_pack = pk is not None and pk.layer == me.layer and dist(pk.pos, me.pos) < backpack.REACH
+            if (at_pack or self.near_storage(me) or self.near_exit(me) or self.near_pond(me)
+                    or lairs.near_altar(self, me) or explore.near(self, me)):
                 self.interact_key()
             else:
                 self.action("quick")
@@ -3170,6 +3392,8 @@ def main():
             art.player(i)
         art_extra.all_new_textures()
         art_bees.all_textures()
+        art_defenses.all_textures()
+        swamp.art_swamp.all_textures()
         art.save_all(os.path.join(HERE, "art_export"))
         print("Saved every texture to the art_export/ folder.")
         return

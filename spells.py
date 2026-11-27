@@ -98,24 +98,29 @@ class Spells:
         rng = random.Random(self.seed * 31 + 17)
         C = CAVE_CELL
         cells = {(int(s.center_x // C), int(s.center_y // C)) for s in cave.ground}
-        exits = [c for _, c in self.links]
+        exits = [c for _, c in self.links] + [e.position for e in cave.exits]     # every ladder, up or down
         spots = []
         for (x, y) in cells:
-            if not all((x + dx, y + dy) in cells for dx in (-1, 0, 1) for dy in (-1, 0, 1)):
-                continue                           # needs open floor all round
             px, py = x * C + C / 2, y * C + C / 2
             if arcade.get_sprites_at_point((px, py), cave.solid):
                 continue
+            roomy = all((x + dx, y + dy) in cells for dx in (-1, 0, 1) for dy in (-1, 0, 1))
             deep = min((math.dist((px, py), e) for e in exits), default=9999)
-            if deep > 520:
-                spots.append((deep, px, py))
+            if deep > 140:
+                spots.append((deep, roomy, px, py))
         spots.sort(reverse=True)
-        pool = spots[:max(10, len(spots) // 2)]    # the deeper half of the cave
-        rng.shuffle(pool)
         chosen = []
-        for _, px, py in pool:
-            if all(math.dist((px, py), c) > 420 for c in chosen):
-                chosen.append((px, py))
+        # Prefer roomy spots deep in the cave, far apart. If the cave is too small or twisty for that,
+        # relax step by step - every spell always gets its shrine.
+        for min_deep, apart, need_room in ((520, 420, True), (400, 330, True), (280, 240, False), (140, 150, False)):
+            pool = [sp for sp in spots if sp[0] > min_deep and (sp[1] or not need_room)]
+            pool = pool[:max(10, len(pool) // 2)]          # the deeper half of what's left
+            rng.shuffle(pool)
+            for _, _, px, py in pool:
+                if len(chosen) == len(SPELL_ORDER):
+                    break
+                if all(math.dist((px, py), c) > apart for c in chosen):
+                    chosen.append((px, py))
             if len(chosen) == len(SPELL_ORDER):
                 break
         for key, (px, py) in zip(SPELL_ORDER, chosen):

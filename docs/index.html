@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Last Light — Survive the Night</title>
+<meta name="description" content="Last Light: a free 3D survival game. Gather by day, build by dusk, survive the night - alone or with friends. Free download for Windows and Mac.">
+<meta property="og:title" content="Last Light — Survive the Night">
+<meta property="og:description" content="A free 3D survival game. Gather by day, build by dusk, survive the night - together.">
+<meta property="og:image" content="img/hero.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rubik+Dirt&family=Grenze:wght@600;800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --night: #0b0f17;
+  --night-2: #121826;
+  --ash: #1b2232;
+  --line: rgba(255, 214, 140, 0.16);
+  --ember: #ff8a3d;
+  --flame: #ffd68c;
+  --coal: #c2410c;
+  --text: #ece6da;
+  --muted: #a49c8e;
+  --moss: #9fbf6b;
+  --radius: 14px;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--night); color: var(--text);
+  font: 18px/1.6 "Atkinson Hyperlegible", system-ui, sans-serif;
+  overflow-x: hidden;
+}
+a { color: var(--flame); }
+img { max-width: 100%; display: block; }
+.wrap { width: min(1080px, 100% - 32px); margin-inline: auto; }
+
+/* ------------------------------------------------ hero: a campfire in the dark */
+.hero {
+  position: relative; min-height: 92vh; display: grid; place-items: center; text-align: center;
+  padding: 64px 0 120px; isolation: isolate; overflow: hidden;
+  background:
+    radial-gradient(60% 45% at 50% 100%, rgba(255, 138, 61, 0.35), transparent 70%),
+    radial-gradient(90% 60% at 50% 110%, rgba(194, 65, 12, 0.35), transparent 70%),
+    linear-gradient(180deg, #05070c 0%, #0b0f17 55%, #160d08 100%);
+}
+.hero::before {          /* the screenshot, deep in the dark */
+  content: ""; position: absolute; inset: 0; z-index: -2;
+  background: url("img/hero.jpg") center / cover no-repeat; opacity: 0.22; filter: saturate(1.2) blur(1px);
+  mask-image: radial-gradient(70% 60% at 50% 60%, #000 30%, transparent 80%);
+}
+.embers { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
+.embers i {
+  position: absolute; bottom: -10px; width: 4px; height: 4px; border-radius: 50%;
+  background: var(--flame); box-shadow: 0 0 10px 2px var(--ember); opacity: 0;
+  animation: rise linear infinite;
+}
+@keyframes rise {
+  0%   { transform: translate(0, 0) scale(1); opacity: 0; }
+  10%  { opacity: 1; }
+  100% { transform: translate(var(--dx), -95vh) scale(0.2); opacity: 0; }
+}
+.kicker { letter-spacing: 0.35em; text-transform: uppercase; color: var(--muted); font-size: 0.8rem; }
+h1 {
+  font-family: "Rubik Dirt", "Grenze", serif; font-weight: 400; margin: 0.1em 0 0;
+  font-size: clamp(3.4rem, 13vw, 9rem); line-height: 0.95; color: var(--flame);
+  text-shadow: 0 0 40px rgba(255, 138, 61, 0.55), 0 4px 0 #6b2a07;
+  animation: flicker 5s infinite;
+}
+@keyframes flicker { 0%, 100% { opacity: 1; } 47% { opacity: 1; } 48% { opacity: 0.86; } 50% { opacity: 1; } 72% { opacity: 0.93; } 73% { opacity: 1; } }
+.tagline { font-family: "Grenze", serif; font-weight: 600; font-size: clamp(1.2rem, 3.2vw, 1.8rem); margin: 0.4em 0 1.2em; }
+.tagline span { color: var(--flame); }
+
+.download {
+  display: inline-flex; align-items: center; gap: 14px; text-decoration: none;
+  background: linear-gradient(180deg, #ffb35c, #ff7a1a 60%, #d45a0c);
+  color: #1a0c03; font-weight: 700; font-size: 1.25rem; padding: 18px 34px; border-radius: 999px;
+  box-shadow: 0 0 0 4px rgba(255, 214, 140, 0.15), 0 10px 40px rgba(255, 122, 26, 0.45);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.download:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 0 0 6px rgba(255, 214, 140, 0.2), 0 16px 50px rgba(255, 122, 26, 0.6); }
+.download:focus-visible { outline: 3px solid var(--flame); outline-offset: 4px; }
+.download svg { width: 26px; height: 26px; }
+.dl-sub { margin-top: 14px; color: var(--muted); font-size: 0.95rem; }
+.version-pill {
+  display: inline-flex; gap: 10px; align-items: center; margin-top: 22px; padding: 8px 16px;
+  border: 1px solid var(--line); border-radius: 999px; background: rgba(11, 15, 23, 0.6);
+  font-size: 0.95rem;
+}
+.version-pill b { color: var(--flame); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--moss); box-shadow: 0 0 10px var(--moss); }
+
+/* ------------------------------------------------ sections */
+section { padding: 88px 0; position: relative; }
+section.alt { background: linear-gradient(180deg, var(--night-2), var(--night)); }
+h2 {
+  font-family: "Grenze", serif; font-weight: 800; font-size: clamp(2rem, 5vw, 3rem); line-height: 1.1;
+  margin: 0 0 0.3em; color: var(--flame);
+}
+h3 { font-family: "Grenze", serif; font-weight: 800; font-size: 1.45rem; margin: 0 0 0.3em; }
+.lead { font-size: 1.15rem; color: var(--muted); max-width: 46em; margin: 0 0 1.8em; }
+
+/* the night strip of screenshots */
+.strip { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 10px; margin-top: 8px; }
+.strip figure { margin: 0; position: relative; overflow: hidden; border-radius: 10px; border: 1px solid var(--line); }
+.strip figure:first-child { grid-row: span 2; }
+.strip img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.6s ease; }
+.strip figure:hover img { transform: scale(1.05); }
+.strip figcaption {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 22px 12px 8px; font-size: 0.85rem;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+}
+
+/* steps */
+.tabs { display: inline-flex; padding: 5px; border-radius: 999px; background: var(--ash); border: 1px solid var(--line); margin-bottom: 26px; }
+.tabs button {
+  font: inherit; font-weight: 700; color: var(--muted); background: none; border: 0; cursor: pointer;
+  padding: 10px 26px; border-radius: 999px;
+}
+.tabs button[aria-selected="true"] { background: var(--flame); color: #1a0c03; }
+.tabs button:focus-visible { outline: 2px solid var(--flame); outline-offset: 2px; }
+.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 16px; counter-reset: step; }
+.steps > li {
+  counter-increment: step; position: relative; padding: 22px 24px 22px 88px; border-radius: var(--radius);
+  background: var(--ash); border: 1px solid var(--line);
+}
+.steps > li::before {
+  content: counter(step); position: absolute; left: 22px; top: 20px; width: 46px; height: 46px; border-radius: 50%;
+  display: grid; place-items: center; font-family: "Grenze", serif; font-weight: 800; font-size: 1.5rem;
+  color: #1a0c03; background: radial-gradient(circle at 40% 35%, #ffe2a8, #ff8a3d 70%);
+  box-shadow: 0 0 18px rgba(255, 138, 61, 0.5);
+}
+.steps p { margin: 0.2em 0 0; }
+.note {
+  margin-top: 10px; padding: 10px 14px; border-left: 3px solid var(--ember); border-radius: 6px;
+  background: rgba(255, 138, 61, 0.08); font-size: 0.95rem;
+}
+.note strong { color: var(--flame); }
+kbd, code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.85em; padding: 2px 7px;
+  border-radius: 6px; background: #0b0f17; border: 1px solid var(--line); color: var(--flame);
+}
+.file { font-weight: 700; color: var(--flame); white-space: nowrap; }
+.btn-sm {
+  display: inline-block; margin-top: 8px; padding: 8px 18px; border-radius: 999px; text-decoration: none;
+  border: 1px solid var(--flame); color: var(--flame); font-weight: 700; font-size: 0.95rem;
+}
+.btn-sm:hover { background: var(--flame); color: #1a0c03; }
+[hidden] { display: none !important; }
+
+/* updates */
+.update-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.card { padding: 26px; border-radius: var(--radius); background: var(--ash); border: 1px solid var(--line); }
+.card.glow { box-shadow: 0 0 0 1px rgba(255, 138, 61, 0.25), 0 0 50px rgba(255, 138, 61, 0.12) inset; }
+.bignum { font-family: "Grenze", serif; font-weight: 800; font-size: 3.6rem; line-height: 1; color: var(--flame); }
+.changes { margin: 14px 0 0; padding-left: 1.1em; }
+.changes li { margin: 4px 0; }
+.changes li::marker { color: var(--ember); }
+details.older { margin-top: 16px; }
+details.older summary { cursor: pointer; color: var(--muted); }
+.mini { font-size: 0.95rem; color: var(--muted); }
+.mock {
+  margin-top: 14px; padding: 12px; border-radius: 10px; background: #0b0f17; border: 1px dashed var(--line);
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.82rem; color: #cfc6b4; overflow-x: auto;
+}
+.mock .y { color: var(--flame); }
+
+/* controls */
+.controls { width: 100%; border-collapse: collapse; font-size: 0.98rem; }
+.controls th, .controls td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.controls th { color: var(--muted); font-weight: 700; font-size: 0.85rem; letter-spacing: 0.08em; text-transform: uppercase; }
+
+/* faq */
+.faq details { border-bottom: 1px solid var(--line); padding: 16px 0; }
+.faq summary { cursor: pointer; font-weight: 700; font-size: 1.08rem; list-style: none; display: flex; gap: 12px; }
+.faq summary::before { content: "+"; color: var(--ember); font-weight: 800; width: 1em; flex: none; }
+.faq details[open] summary::before { content: "–"; }
+.faq details > div { padding: 8px 0 0 calc(1em + 12px); color: #d8d0c2; }
+
+footer { padding: 48px 0 60px; color: var(--muted); font-size: 0.9rem; text-align: center; border-top: 1px solid var(--line); }
+
+/* ------------------------------------------------ load-in */
+.rise-in { opacity: 0; transform: translateY(14px); animation: up 0.8s ease forwards; }
+.d1 { animation-delay: 0.1s; } .d2 { animation-delay: 0.3s; } .d3 { animation-delay: 0.5s; } .d4 { animation-delay: 0.7s; }
+@keyframes up { to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .rise-in { opacity: 1; transform: none; }
+}
+@media (max-width: 760px) {
+  body { font-size: 17px; }
+  .strip { grid-template-columns: 1fr 1fr; }
+  .strip figure:first-child { grid-column: span 2; grid-row: auto; }
+  .update-grid { grid-template-columns: 1fr; }
+  .steps > li { padding: 74px 18px 18px; }
+  .steps > li::before { top: 16px; left: 18px; }
+  .download { padding: 16px 24px; font-size: 1.1rem; }
+  .controls th:nth-child(3), .controls td:nth-child(3) { display: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="embers" aria-hidden="true"></div>
+  <div class="wrap">
+    <div class="kicker rise-in d1">A free 3D survival game</div>
+    <h1 class="rise-in d2">Last Light</h1>
+    <p class="tagline rise-in d3">Gather by day. Build by dusk. <span>Survive the night</span> — together.</p>
+    <div class="rise-in d4">
+      <a class="download" id="dl" href="https://github.com/wyattjohnson12/LastLight3D/archive/refs/heads/main.zip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M6 11l6 6 6-6M4 21h16"/></svg>
+        <span id="dl-label">Download Last Light</span>
+      </a>
+      <div class="dl-sub">Free · Windows &amp; Mac · then follow the 3 steps below</div>
+      <div class="dl-sub" id="phone-note" hidden>On a phone? Last Light is played on a Windows or Mac computer — open this page there.</div>
+      <div class="version-pill" aria-live="polite"><span class="dot"></span>Latest version <b id="v-top">2.0.0</b> <span id="v-name-top">· Lairs &amp; Lost Places</span></div>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>What is it?</h2>
+    <p class="lead">Chop trees, mine rocks and hunt by day. When the sun goes down the dead come for you, so build walls,
+      light fires and hold out until dawn. Explore abandoned camps and ruins, learn new recipes, tame pets, and wake the
+      bosses in their lairs when you dare. You will die a lot — and get a little better every time. Play alone, with friends
+      on the same Wi-Fi, or split-screen on one computer.</p>
+    <div class="strip">
+      <figure><img src="img/base-night.jpg" alt="A small base with walls and campfires lit up at night" loading="lazy"><figcaption>Your base at night</figcaption></figure>
+      <figure><img src="img/lair.jpg" alt="A boss altar glowing in the dark" loading="lazy"><figcaption>A boss lair — wake it if you dare</figcaption></figure>
+      <figure><img src="img/camp.jpg" alt="An abandoned camp in a forest" loading="lazy"><figcaption>Places to discover</figcaption></figure>
+      <figure><img src="img/lake.jpg" alt="First person view across a lake" loading="lazy"><figcaption>See it through your own eyes</figcaption></figure>
+      <figure><img src="img/tower.jpg" alt="A ruined watchtower" loading="lazy"><figcaption>Ruins with loot (and guards)</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="start">
+  <div class="wrap">
+    <h2>Start playing in 3 steps</h2>
+    <p class="lead">You only do this once. No accounts, no git, nothing to pay for.</p>
+    <div class="tabs" role="tablist" aria-label="Your computer">
+      <button role="tab" id="tab-win" aria-selected="true" aria-controls="win">Windows</button>
+      <button role="tab" id="tab-mac" aria-selected="false" aria-controls="mac">Mac</button>
+    </div>
+
+    <ol class="steps" id="win" role="tabpanel" aria-labelledby="tab-win">
+      <li>
+        <h3>Install Python (free)</h3>
+        <p>Last Light runs on Python. Get it from python.org and run the installer.</p>
+        <a class="btn-sm" href="https://www.python.org/downloads/windows/" target="_blank" rel="noopener">Get Python for Windows</a>
+        <div class="note"><strong>Important:</strong> on the first screen of the installer, tick the box
+          <strong>“Add python.exe to PATH”</strong>, then click <strong>Install Now</strong>.</div>
+      </li>
+      <li>
+        <h3>Download the game and unzip it</h3>
+        <p>Click <a href="#" class="dl-link">Download Last Light</a>. Find <span class="file">LastLight3D-main.zip</span> in your
+          Downloads, <strong>right-click it → Extract All… → Extract</strong>. You get a folder called
+          <span class="file">LastLight3D-main</span> — you can move it anywhere (Documents or your Desktop are fine).</p>
+      </li>
+      <li>
+        <h3>Double-click “Play Last Light (Windows)”</h3>
+        <p>It's inside the folder. The first time, it installs what the game needs (about a minute), then the game opens.
+          From now on, this is how you start the game.</p>
+        <div class="note">If a blue box says <strong>“Windows protected your PC”</strong>, click <strong>More info → Run anyway</strong>.
+          It only asks once.</div>
+      </li>
+    </ol>
+
+    <ol class="steps" id="mac" role="tabpanel" aria-labelledby="tab-mac" hidden>
+      <li>
+        <h3>Install Python (free)</h3>
+        <p>Last Light runs on Python. Get the macOS installer from python.org, open it and click through.</p>
+        <a class="btn-sm" href="https://www.python.org/downloads/macos/" target="_blank" rel="noopener">Get Python for Mac</a>
+      </li>
+      <li>
+        <h3>Download the game</h3>
+        <p>Click <a href="#" class="dl-link">Download Last Light</a>. Your Mac unzips it into a folder called
+          <span class="file">LastLight3D-main</span> in Downloads (if you only see a .zip, double-click it).
+          Move the folder anywhere you like — Documents is a good spot.</p>
+      </li>
+      <li>
+        <h3>Open “Play Last Light (Mac)”</h3>
+        <p><strong>The first time only:</strong> <strong>right-click</strong> (or Control-click) <span class="file">Play Last Light (Mac)</span>
+          and choose <strong>Open</strong>, then <strong>Open</strong> again. It installs what the game needs (about a minute), then the game
+          opens. After that, just double-click it.</p>
+        <div class="note">Says it <strong>“can't be opened”</strong>? Open <strong>System Settings → Privacy &amp; Security</strong>, scroll down
+          and click <strong>Open Anyway</strong>. It only asks once.</div>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section id="update">
+  <div class="wrap">
+    <h2>Updating is automatic</h2>
+    <p class="lead">New things get added all the time. You never need to download the game again: every time you start it with
+      <strong>Play Last Light</strong>, it checks for a new version and asks if you want it. Press <kbd>ENTER</kbd> and you're up to date.
+      <strong>Your saved games, settings and achievements are always kept.</strong></p>
+    <div class="update-grid">
+      <div class="card glow">
+        <div class="mini">Newest version</div>
+        <div class="bignum" id="v-big">2.0.0</div>
+        <div><strong id="v-name">Lairs &amp; Lost Places</strong> <span class="mini" id="v-date">· 2026-11-27</span></div>
+        <ul class="changes" id="v-notes">
+          <li>Bosses now sleep in lairs out in the world - wake them at the altar when YOU are ready</li>
+          <li>About 30 places to discover: camps, ruins, huts, graves, shrines, sunken boats... with loot</li>
+          <li>Die and your backpack stays where you fell - get it back before it's gone</li>
+        </ul>
+        <details class="older" id="v-history-wrap" hidden><summary>Older versions</summary><ul class="changes" id="v-history"></ul></details>
+      </div>
+      <div class="card">
+        <h3>Which version do I have?</h3>
+        <p>It's in the bottom-right corner of the title screen. If a newer one is out, the title screen tells you too:</p>
+        <div class="mock"><span class="y">NEW VERSION 2.1.0 IS OUT!</span> Close the game and open "Play Last Light" to update.</div>
+        <p class="mini" style="margin-top:16px">Then close the game, open <strong>Play Last Light</strong> again, and answer <kbd>Y</kbd> (or just press
+          <kbd>ENTER</kbd>):</p>
+        <div class="mock">NEW VERSION 2.1.0<br>&nbsp;* ...what's new...<br><span class="y">Update now? (your saves are kept) [Y/n]</span></div>
+        <p class="mini" style="margin-top:16px"><strong>Playing together?</strong> Everyone should update before you play, so you're all on the same version.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="controls">
+  <div class="wrap">
+    <h2>Controls</h2>
+    <p class="lead">Keyboard and mouse, or an Xbox controller. Press <kbd>ESC</kbd> in the game for the full list.</p>
+    <table class="controls">
+      <thead><tr><th>Do this</th><th>Keyboard + mouse</th><th>Controller</th></tr></thead>
+      <tbody>
+        <tr><td>Move / aim</td><td><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / mouse</td><td>Left stick / right stick</td></tr>
+        <tr><td>Sprint (uses energy)</td><td>Hold <kbd>SHIFT</kbd> while moving</td><td>Click the left stick</td></tr>
+        <tr><td>Rest</td><td>Hold <kbd>SHIFT</kbd> standing still</td><td>Hold X</td></tr>
+        <tr><td>Attack, chop, mine, hunt</td><td>Left click</td><td>A or RT</td></tr>
+        <tr><td>Build, eat, tame</td><td>Right click</td><td>LT</td></tr>
+        <tr><td>Backpack &amp; crafting</td><td><kbd>TAB</kbd></td><td>Y</td></tr>
+        <tr><td>Use: storage, caves, chests, drink, boss altars</td><td><kbd>E</kbd></td><td>B</td></tr>
+        <tr><td>First person on / off</td><td><kbd>V</kbd></td><td>Click the right stick</td></tr>
+        <tr><td>Pause, help &amp; save</td><td><kbd>ESC</kbd></td><td>Menu</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="faq" id="help">
+  <div class="wrap">
+    <h2>Help</h2>
+    <details><summary>Nothing happens / a window flashes and closes (Windows)</summary>
+      <div>Python probably isn't installed, or “Add python.exe to PATH” wasn't ticked. Run the Python installer again, choose
+        <strong>Modify</strong> (or uninstall and install again) and make sure that box is ticked. Then double-click
+        <span class="file">Play Last Light (Windows)</span> again.</div></details>
+    <details><summary>The Mac says it “can't be opened because it is from an unidentified developer”</summary>
+      <div>That's normal for games that aren't from the App Store. Right-click the file → <strong>Open</strong> → <strong>Open</strong>. Or:
+        <strong>System Settings → Privacy &amp; Security → Open Anyway</strong>. You only need to do this once.</div></details>
+    <details><summary>It says “Couldn't install the game's packages”</summary>
+      <div>It needs the internet the first time. Check you're online and try again. On a school or work computer, installing
+        might be blocked — ask whoever looks after the computer.</div></details>
+    <details><summary>The game runs slowly</summary>
+      <div>On the title screen open <strong>Screen &amp; graphics…</strong> and set <strong>Sun shadows</strong> to <strong>Low</strong> or
+        <strong>Off</strong>. Still slow? Turn <strong>Glow effects</strong> off too.</div></details>
+    <details><summary>Where are my saved games? Will updating delete them?</summary>
+      <div>Updates never touch them. They're in the <span class="file">saves</span> folder inside the game folder. To be extra safe
+        before deleting the game folder, copy that folder somewhere else first.</div></details>
+    <details><summary>Friends can't find my co-op game</summary>
+      <div>You must be on the same Wi-Fi and on the same version (everyone: close the game and open Play Last Light to update).
+        If your computer asks about network connections, click <strong>Allow</strong>.</div></details>
+    <details><summary>I already use git — can I still use <code>git pull</code>?</summary>
+      <div>Yes. Clone it once:
+        <div class="mock">git clone https://github.com/wyattjohnson12/LastLight3D.git<br>cd LastLight3D<br>python3 play.py</div>
+        Update any time with <code>git pull</code> — or let <code>play.py</code> do it: in a git copy it updates with
+        <code>git pull</code> instead of downloading. You can also run the game directly with <code>python3 main.py</code>
+        after <code>pip3 install -r requirements.txt</code>.</div></details>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    Last Light · free to play · <a href="https://github.com/wyattjohnson12/LastLight3D" target="_blank" rel="noopener">see the code on GitHub</a>
+  </div>
+</footer>
+
+<script>
+(() => {
+  const REPO = "wyattjohnson12/LastLight3D";
+  const ZIP = `https://github.com/${REPO}/archive/refs/heads/main.zip`;
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  // download links (the big button and the ones in the steps)
+  document.getElementById("dl").href = ZIP;
+  document.querySelectorAll(".dl-link").forEach(a => a.href = ZIP);
+
+  // Windows / Mac tabs - start on the visitor's own computer
+  const tabs = { win: document.getElementById("tab-win"), mac: document.getElementById("tab-mac") };
+  function show(which) {
+    for (const k of Object.keys(tabs)) {
+      tabs[k].setAttribute("aria-selected", String(k === which));
+      document.getElementById(k).hidden = k !== which;
+    }
+  }
+  tabs.win.onclick = () => show("win");
+  tabs.mac.onclick = () => show("mac");
+  const ua = navigator.userAgent || "";
+  const isMac = /Mac/.test(navigator.platform || "") || /Macintosh/.test(ua);
+  if (/iPhone|iPad|Android/.test(ua)) document.getElementById("phone-note").hidden = false;
+  if (isMac) show("mac");
+  document.getElementById("dl-label").textContent = isMac ? "Download for Mac" : "Download for Windows";
+
+  // the newest version, straight from the game's own version.json on GitHub
+  fetch(`https://raw.githubusercontent.com/${REPO}/main/version.json?t=${Date.now()}`)
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(v => {
+      document.getElementById("v-top").textContent = v.version;
+      document.getElementById("v-big").textContent = v.version;
+      document.getElementById("v-name-top").textContent = v.name ? "· " + v.name : "";
+      document.getElementById("v-name").textContent = v.name || "";
+      document.getElementById("v-date").textContent = v.date ? "· " + v.date : "";
+      document.getElementById("v-notes").innerHTML = (v.notes || []).map(n => `<li>${esc(n)}</li>`).join("");
+      const hist = v.history || [];
+      if (hist.length) {
+        document.getElementById("v-history").innerHTML = hist.map(h =>
+          `<li><strong>${esc(h.version)}</strong>${h.name ? " · " + esc(h.name) : ""}${h.date ? ` <span class="mini">(${esc(h.date)})</span>` : ""}` +
+          ((h.notes || []).length ? `<br><span class="mini">${h.notes.map(esc).join(" · ")}</span>` : "") + `</li>`).join("");
+        document.getElementById("v-history-wrap").hidden = false;
+      }
+    })
+    .catch(() => {});      // offline / not published yet: keep the numbers written in the page
+
+  // embers rising from the bottom of the hero
+  const box = document.querySelector(".embers");
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    for (let i = 0; i < 38; i++) {
+      const e = document.createElement("i");
+      e.style.left = Math.random() * 100 + "%";
+      e.style.setProperty("--dx", (Math.random() * 160 - 80) + "px");
+      e.style.animationDuration = (6 + Math.random() * 9) + "s";
+      e.style.animationDelay = (-Math.random() * 14) + "s";
+      const s = 2 + Math.random() * 4;
+      e.style.width = e.style.height = s + "px";
+      box.appendChild(e);
+    }
+  }
+})();
+</script>
+</body>
+</html>
