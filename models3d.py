@@ -366,11 +366,21 @@ void main() {
     if (v_glow > 0.5) {
         rgb = v_col.rgb * 1.15 * lt_light(v_pos, vec3(0.0));
     } else {
-        vec3 sun = (0.6 + 0.08 * n.z) * lt_hemi(n) + 0.5 * max(dot(n, light), 0.0);
+        vec3 sun = ((0.6 + 0.08 * n.z) * lt_hemi(n) + 0.5 * max(dot(n, light), 0.0)) * lt_sunlit(v_pos, n);
         rgb = v_col.rgb * sun * lt_light(v_pos, n) + lt_rimlight(v_pos, n) * (0.35 + v_col.rgb);
     }
     rgb += vec3(0.45) * v_flash;
     f_color = vec4(lt_fogged(rgb, v_pos), v_col.a);
+}
+"""
+
+
+# The shadow pass (shadows3d.py): the same vertex shader seen from the sun, writing only depth.
+SHADOW_FS = """
+#version 330
+in vec4 v_col;
+void main() {
+    if (v_col.a <= 0.01) discard;
 }
 """
 
@@ -621,7 +631,7 @@ class CreatureModels:
         sx, sy = self._progs3d[1]["sun"]
         lx, ly, lz = -sx, -sy, 1.4
         ln = math.sqrt(lx * lx + ly * ly + lz * lz)
-        prog["light"] = (lx / ln, ly / ln, lz / ln)
+        prog.set_uniform_safe("light", (lx / ln, ly / ln, lz / ln))     # (not in the shadow program)
         prog["time"] = float(self.flame_t % 1000.0)
         prog["up_k"] = float(self._m3_up)
         ctx = self.ctx

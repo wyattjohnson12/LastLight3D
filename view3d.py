@@ -15,6 +15,8 @@ collisions, AI, crafting and networking are untouched. Only the drawing is diffe
   * Walls (cave walls and the walls you build) are real 3D blocks, lit like everything else, with a
     little surface pattern of their own drawn by the shader (planks, stone blocks, iron plates, rock).
   * Light, shade and fog for everything come from one shared shader library (lighting3d.py).
+  * By day the sun casts real shadows (a shadow map, shadows3d.py) from the 3D shapes, creature models
+    and walls; painted cut-outs keep their soft blob shadows (and everything gets those again at night).
 
 Two small custom shaders do the work, fed by the same arcade SpriteLists the 2D game already uses,
 so there is no second copy of the world to keep in sync.
@@ -31,6 +33,7 @@ from pyglet.math import Mat4, Vec3
 import fx3d
 import lighting3d
 import models3d
+import shadows3d
 import shapes3d
 import terrain3d
 import ui
@@ -187,6 +190,8 @@ uniform vec4 spritelist_color;
 uniform int mode;
 uniform float alpha_cut;
 uniform float shade;     // shadow strength (fainter at night)
+uniform int upright;     // 1: cut-outs (no real facing - sun shadows fall on them all over)
+uniform int no_sun;      // 1: not darkened by sun shadows (flames)
 in vec2 gs_uv;
 in vec4 gs_color;
 out vec4 f_color;
@@ -203,7 +208,9 @@ void main() {
     vec4 t = texture(sprite_texture, gs_uv);
     if (t.a <= alpha_cut) discard;      // also drops the painted-on shadows of the 2D art
     vec4 c = t * gs_color * spritelist_color;
-    f_color = vec4(lt_fogged(c.rgb * lt_light(p, vec3(0.0)), p), c.a);
+    // sun shadows (lighting3d.py / shadows3d.py): the ground and what lies on it face the way the ground does
+    float sun = no_sun == 1 ? 1.0 : lt_sunlit(p, upright == 1 ? vec3(0.0) : lt_face(p));
+    f_color = vec4(lt_fogged(c.rgb * lt_light(p, vec3(0.0)) * sun, p), c.a);
 }
 """
 
@@ -229,7 +236,8 @@ in vec4 v_col;
 in vec3 v_pos;
 out vec4 f_color;
 void main() {
-    vec3 rgb = v_col.rgb * lt_light(v_pos, lt_face(v_pos));
+    vec3 n = lt_face(v_pos);
+    vec3 rgb = v_col.rgb * lt_light(v_pos, n) * lt_sunlit(v_pos, n);
     f_color = vec4(lt_fogged(rgb, v_pos), v_col.a);
 }
 """
@@ -340,6 +348,7 @@ void main() {
     vec3 alb = pattern(st, v_col);
     float ao = mix(0.5, 1.0, v_h);          // darker towards the foot (the old blocks had this baked in)
     vec3 day = (0.62 * lt_hemi(n) + 0.38 * max(dot(n, lt_fill.xyz), 0.0) + 0.25 * max(dot(n, lt_sun.xyz), 0.0)) * ao;
+    day *= lt_sunlit(v_pos, n);             // in the shadow of a tree or another wall (shadows3d.py)
     vec3 rgb = alb * day * lt_light(v_pos, n);
     f_color = vec4(lt_fogged(rgb, v_pos), 1.0);
 }
@@ -347,7 +356,7 @@ void main() {
 
 
 # =========================================================================== the mixin
-class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
+class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.SunShadows):
     """Mixed into the game window. Replaces the flat camera with a tilted 3D one."""
 
     # ------------------------------------------------------------------ camera maths
@@ -442,6 +451,37 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
         self.view = Mat4.look_at(Vec3(ex, ey, ez), Vec3(ex + f[0], ey + f[1], ez + f[2]), Vec3(0.0, 0.0, 1.0))
         self._view3d = self.view
 
+    _ring_lit = False
+
+    def light_at(self, x, y, z=0.0):
+        """The light (r, g, b, 0..1) at a spot z above the ground: the time of day's ambient plus the point
+        lights near it, topped out at daylight - what the light map gives the ground and lt_light gives
+        standing things (lighting3d.py). Uses the current view's lighting state (_lt_frame)."""
+        st = getattr(self, "_lt", None)
+        if st is None:
+            return 1.0, 1.0, 1.0
+        r, g, b = st.amb
+        if min(r, g, b) >= 0.999:
+            return 1.0, 1.0, 1.0
+        z += self.ground_z(x, y)
+        for lx, ly, lz, reach, cr, cg, cb, _ in st.lights:
+            d2 = (lx - x) ** 2 + (ly - y) ** 2 + (lz - z) ** 2
+            if d2 >= reach * reach:
+                continue
+            t = max(0.0, min(1.0, (math.sqrt(d2) / reach - 0.3) / 0.7))
+            f = 1.0 - t * t * (3 - 2 * t)          # the shaders' falloff
+            r, g, b = r + cr * f, g + cg * f, b + cb * f
+        return min(1.0, r), min(1.0, g), min(1.0, b)
+
+    def lit_col(self, col, x, y, z=0.0, glow=0.0):
+        """col (r, g, b[, a]) darkened by the light at a spot, for things drawn straight on the screen after
+        the light map (falling boulders, pet markers, the build reach ring) so they get dark at night like
+        everything around them. glow: 0..1, how much it shines by itself (a burning meteor)."""
+        lr, lg, lb = self.light_at(x, y, z)
+        k = [glow + (1.0 - glow) * v for v in (lr, lg, lb)]
+        out = tuple(int(c * m) for c, m in zip(col[:3], k))
+        return out + tuple(col[3:])
+
     def lift_to_ground(self, x=None, y=None):
         """HILLS: plain arcade shapes drawn in the 3D camera lie at z = 0. Lift the camera so the next ones
         lie on the ground at (x, y); call with no arguments to put it back."""
@@ -451,8 +491,11 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
         z = self.ground_z(x, y) if x is not None else 0.0
         self.view = base @ Mat4.from_translation(Vec3(0.0, 0.0, z)) if z else base
 
-    def ground_ring(self, x, y, r, col, width=2):
-        """A circle outline lying on the ground (it follows the hills). Call with the 3D camera on."""
+    def ground_ring(self, x, y, r, col, width=2, lit=False):
+        """A circle outline lying on the ground (it follows the hills). Call with the 3D camera on.
+        lit: darken it by the light there (for rings drawn after the light map - see lit_col)."""
+        if lit or self._ring_lit:
+            col = self.lit_col(col, x, y)
         if self.hill_grid() is None:
             arcade.draw_circle_outline(x, y, r, col, width)
             return
@@ -504,6 +547,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
         bill["fp"] = 0
         bill["face_right"] = (1.0, 0.0)
         bill["shade"] = 1.0
+        bill["upright"] = 1
         box = ctx.program(vertex_shader=BOX_VS, fragment_shader=lighting3d.inject(BOX_FS, frag=True))
         self._progs3d = (flat, bill, box)
         self._wall_prog = ctx.program(vertex_shader=WALL_VS, fragment_shader=lighting3d.inject(WALL_FS, frag=True))
@@ -528,14 +572,16 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
         self._wall_sig = {}
         self._wall_geo = {}
 
-    def _mesh_prog(self, passes, verts=shapes3d.MAX_VERTS):
+    def _mesh_prog(self, passes, verts=shapes3d.MAX_VERTS, shadow=False):
         """The shape program that draws `passes` passes of at most `verts` vertices in one go
-        (or the single fallback program)."""
+        (or the single fallback program). shadow: its depth-only twin for the sun's shadow map."""
         key = (passes, verts) if self._mesh_inv else 0
+        if shadow:
+            key = ("shadow", key)
         p = self._mesh_progs.get(key)
         if p is None:
             geo, frag = shapes3d.program_sources(self._mesh_lib, passes if self._mesh_inv else None,
-                                                 verts if self._mesh_inv else shapes3d.MAX_VERTS)
+                                                 verts if self._mesh_inv else shapes3d.MAX_VERTS, shadow)
             p = self.ctx.program(vertex_shader=self._mesh_vs, geometry_shader=terrain3d.inject(geo, "R * 0.5"),
                                  fragment_shader=frag)
             p["sprite_texture"] = 0
@@ -566,26 +612,65 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
                 prog["up_scale"] = UP
 
     def flat(self, lst, height=0.0, boxes=False, blend=None):
+        if self._sh_pass:           # things lying flat cast no shadow (shadows3d.py)
+            return
         self._draw_list(lst, self._progs3d[0], blend, height=float(height), boxes_only=int(boxes))
 
-    def stand(self, lst, lift=0.0, nudge=0.0, cut=0.32, blend=None, shadow=False):
+    def stand(self, lst, lift=0.0, nudge=0.0, cut=0.32, blend=None, shadow=False, sun=True):
+        """Cut-outs facing the camera (shadow=True: their soft blob shadows on the ground instead).
+        sun=False: not darkened by sun shadows (flames)."""
+        if self._sh_pass:           # cut-outs don't cast into the shadow map: they keep their blobs
+            return
         if shadow:
             self._draw_list(lst, self._progs3d[1], blend, mode=1)
+        elif not sun:
+            self._draw_list(lst, self._progs3d[1], blend, lift=float(lift), nudge=float(nudge), alpha_cut=float(cut),
+                            no_sun=1)
         else:
             self._draw_list(lst, self._progs3d[1], blend, lift=float(lift), nudge=float(nudge), alpha_cut=float(cut))
+
+    def drop_shadows(self, L, fp, shade):
+        """The soft blob shadows under everything standing up. While the sun casts real shadows
+        (shadows3d.py) the 3D shapes and models don't need theirs: they fade out as the real ones fade in
+        (so at night it's the old look), creatures keep a faint one where they touch the ground, and
+        painted cut-outs keep theirs."""
+        bill = self._progs3d[1]
+        k = self._sh_k
+        if k <= 0.0:
+            for lst in (L.bushes, L.rocks, L.builds, L.animals, self.player_list, L.zombies, L.bosses, L.huts, L.trees):
+                self.stand(lst, shadow=True)
+            return
+        try:
+            for lst, ver, shaped in ((L.bushes, 0, None), (L.rocks, 0, None),
+                                     (L.builds, getattr(self, "struct_ver", 0), MESH_BUILDS),
+                                     (L.trees, getattr(self, "nodes_ver", 0), None)):
+                for kind, sub in self._by_kind(lst, ver).items():
+                    real = shapes3d.SHAPES.get(kind) is not None and (shaped is None or kind in shaped)
+                    bill["shade"] = shade * (1.0 - k) if real else shade
+                    self.stand(sub, shadow=True)
+            bill["shade"] = shade * (1.0 - k)
+            self.stand(L.huts, shadow=True)
+            bill["shade"] = shade * (1.0 - 0.7 * k) if (fp or self.models3d_mode(fp)) else shade
+            for lst in (L.animals, self.player_list, L.zombies, L.bosses):
+                self.stand(lst, shadow=True)
+        finally:
+            bill["shade"] = shade
 
     def mesh(self, lst, shape, cut=None, inflate=1.0, blend=None, glow=False):
         """Draw every sprite in `lst` as the 3D shape `shape` (shapes3d.SHAPES) with its picture draped on.
         glow=True: only its glowing parts, for adding on top of the night (call with an additive blend)."""
         if not len(lst):
             return
+        if glow and self._sh_pass:
+            return
         sh = shapes3d.SHAPES[shape]
         if sh.ubo is None:
             sh.ubo = self.ctx.buffer(data=sh.data)
         sh.ubo.bind_to_uniform_block(shapes3d.BINDING)
-        p = self._mesh_prog(sh.passes, sh.verts)
+        p = self._mesh_prog(sh.passes, sh.verts, self._sh_pass)    # shadow pass: the depth-only twin
+        p["coarse"] = int(self._sh_pass)       # small extras cast no shadow (cheaper)
         p["inflate"] = float(inflate)
-        p["sun"] = self._progs3d[1]["sun"]
+        p.set_uniform_safe("sun", self._progs3d[1]["sun"])     # (only shading: not in the depth twin)
         p["alpha_cut"] = float(sh.cut if cut is None else cut)
         p["time"] = time.perf_counter() - self._mesh_t0
         p["glow_pass"] = int(glow)
@@ -801,7 +886,6 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
     def draw_world_3d(self, L, vl):
         self._init3d()
         ctx = self.ctx
-        self.post_begin(vl)          # post3d.py: glow effects - draw the world offscreen (no-op when off)
         view = self.view_pos()
         self._trees(L, view)
         cave_geo = self._cave_walls(L) if vl != "over" else None   # any underground layer
@@ -817,6 +901,8 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
         fp = self.fp_on()
         bill["fp"] = int(fp)
         bill["face_right"] = (math.sin(self.fp_yaw), -math.cos(self.fp_yaw)) if fp else (1.0, 0.0)
+        self.sh_frame(L, vl, dk, (sx, sy), shade, fp, built_geo)    # shadows3d.py: the sun's shadow map
+        self.post_begin(vl)          # post3d.py: glow effects - draw the world offscreen (no-op when off)
         if fp:
             self.gui.use()
             self.fp_draw_sky(vl)          # firstperson.py: sky to the horizon
@@ -834,6 +920,8 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
             gl.glDepthMask(gl.GL_FALSE)
         else:
             self.flat(L.ground)
+        if vl == "over":
+            water3d.draw_bog(self, getattr(self, "swamp_pool_list", None))    # water3d.py: the Mire's pools
         self.flat(L.decor)
         self.biome_draw3d(L, vl, "ground")     # biomes.py: rivers, roads, worn ground (terrain.py)
         water3d.draw_ponds(self, L.ponds)     # water3d.py: ponds with moving water
@@ -854,9 +942,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
             ctx.enable(ctx.DEPTH_TEST)
         else:
             self.draw_ground_hazards()
-        uprights = [L.bushes, L.rocks, L.builds, L.animals, self.player_list, L.zombies, L.bosses, L.huts, L.trees]
-        for lst in uprights:
-            self.stand(lst, shadow=True)
+        self.drop_shadows(L, fp, shade)
         if hilly:
             gl.glDepthMask(gl.GL_TRUE)
             ctx.disable(ctx.DEPTH_TEST)
@@ -887,7 +973,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
         self.draw_kinds(L.bushes)
         self.draw_kinds(L.rocks)
         self.draw_kinds(L.builds, getattr(self, "struct_ver", 0), MESH_BUILDS)
-        self.stand(L.flames, lift=2, nudge=2, cut=0.05)
+        self.stand(L.flames, lift=2, nudge=2, cut=0.05, sun=False)
         if self.models3d_mode(fp):      # models3d.py: real low-poly 3D creatures (Blender-built models)
             self.models3d_creatures(L, fp)
         elif fp:        # from eye level the painted-from-above creatures need real bodies
@@ -934,12 +1020,16 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
                 else:
                     self.stand(self._ghost3d, cut=0.05)
                 self._ghost3d.clear()
-                self.draw_defense_preview(item, ghost)   # defenses.py: turret / lantern reach
+                self._ring_lit = True        # (drawn after the light map: darken it by hand)
+                try:
+                    self.draw_defense_preview(item, ghost)   # defenses.py: turret / lantern reach
+                finally:
+                    self._ring_lit = False
             ctx.disable(ctx.DEPTH_TEST)
             t = self.tame_target()
             if t:
                 ctx.disable(ctx.DEPTH_TEST)
-                self.ground_ring(t.center_x, t.center_y, 30, (255, 150, 190, 200), 2)
+                self.ground_ring(t.center_x, t.center_y, 30, (255, 150, 190, 200), 2, lit=True)
         ctx.enable(ctx.DEPTH_TEST)
         self.fx_draw_particles(vl, additive=False)    # chips, dust, blood, smoke (lit like the rest)
         ctx.disable(ctx.DEPTH_TEST)
@@ -958,7 +1048,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
             self.flat(L.glows, blend=blend)
             self.post_glow()         # post3d.py: what's drawn from here on blooms (not the wide haze above)
             ctx.enable(ctx.DEPTH_TEST)
-            self.stand(L.flames, lift=2, nudge=2, cut=0.05)
+            self.stand(L.flames, lift=2, nudge=2, cut=0.05, sun=False)
             self.draw_kind_glows(L.bushes)        # glowcaps, glowing crystals, lantern glass...
             self.draw_kind_glows(L.rocks)
             self.draw_kind_glows(L.builds, getattr(self, "struct_ver", 0), MESH_BUILDS)
@@ -1016,26 +1106,31 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
 
     # ------------------------------------------------------------------ overrides of the 2D versions
     def draw_air_hazards(self):
-        """Falling boulders/meteors and flying globs, drawn at their height (called in GUI space)."""
+        """Falling boulders/meteors and flying globs, drawn at their height (called in GUI space, after the
+        light map - so each is darkened by the light where it is, lit_col)."""
         if self.view_layer != "over":
             return
         for h in self.hazards:
             if h.kind in ("boulder", "meteor") and h.tele > 0:
                 k = max(0.0, h.tele)
-                s = self.project(h.x, h.y, 40 + k * 420)
-                col = (130, 120, 110) if h.kind == "boulder" else (255, 120, 40)
+                z = 40 + k * 420
+                s = self.project(h.x, h.y, z)
+                if h.kind == "boulder":
+                    col = self.lit_col((130, 120, 110, 240), h.x, h.y, z)
+                else:       # a meteor burns: it mostly shines by itself
+                    col = self.lit_col((255, 120, 40, 240), h.x, h.y, z, glow=0.6)
                 if s:
-                    arcade.draw_circle_filled(s[0], s[1], 16 + 6 * (1 - k), col + (240,))
+                    arcade.draw_circle_filled(s[0], s[1], 16 + 6 * (1 - k), col)
             elif h.kind == "glob" and h.tele <= 0:
                 s = self.project(h.x, h.y, 24)
                 if s:
-                    arcade.draw_circle_filled(s[0], s[1], h.r, (140, 230, 70, 240))
+                    arcade.draw_circle_filled(s[0], s[1], h.r, self.lit_col((140, 230, 70, 240), h.x, h.y, 24))
             elif h.kind == "shard" and h.tele <= 0:
                 a = math.atan2(h.vy, h.vx)
                 p0 = self.project(h.x - math.cos(a) * 14, h.y - math.sin(a) * 14, 24)
                 p1 = self.project(h.x + math.cos(a) * 8, h.y + math.sin(a) * 8, 24)
                 if p0 and p1:
-                    arcade.draw_line(*p0, *p1, (190, 235, 255, 255), 5)
+                    arcade.draw_line(*p0, *p1, self.lit_col((190, 235, 255, 255), h.x, h.y, 24, glow=0.3), 5)
         self.draw_swamp_air()     # swamp.py: spore pods in flight
 
     def draw_shots(self, vl):
@@ -1071,8 +1166,10 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
                 continue
             owner = self.players.get(a.owner)
             col = owner.color if owner else (220, 220, 220)
+            z = a.height * UP
+            col = self.lit_col(col, a.center_x, a.center_y, z)      # drawn after the light map: dark at night
             arcade.draw_circle_filled(s[0], s[1], 5, col + (230,))
-            arcade.draw_circle_outline(s[0], s[1], 5, (255, 255, 255, 200), 1)
+            arcade.draw_circle_outline(s[0], s[1], 5, self.lit_col((255, 255, 255, 200), a.center_x, a.center_y, z), 1)
             if a.name:
                 shield = " +" if a.armor else ""
                 ty = s[1] + 9
@@ -1082,7 +1179,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
                 self.txt(f"petname{a.aid}", a.name + shield, s[0], ty, col + (230,), 10, anchor_x="center",
                          bold=True)
             if a.carrying:
-                arcade.draw_circle_filled(s[0] + 10, s[1], 4, (255, 220, 120, 230))
+                arcade.draw_circle_filled(s[0] + 10, s[1], 4, self.lit_col((255, 220, 120, 230), a.center_x, a.center_y, z))
 
     def draw_offscreen_friends(self):
         W, H = ui.W, ui.H

@@ -183,6 +183,7 @@ class Swamp:
 
         keep_clear = [(s.center_x, s.center_y, 150) for s in list(over.ponds) + list(over.exits)]
         self.swamp_pools = []
+        self.swamp_pool_list = arcade.SpriteList()      # the same sprites again: water3d.draw_bog animates them
         for i in range(12 * more):
             p = inside(80)
             if p is None or any(_dist(p, (x, y)) < rr for x, y, rr in keep_clear):
@@ -191,6 +192,7 @@ class Swamp:
                 continue
             s = arcade.Sprite(art_swamp.pool(i % 3), center_x=p[0], center_y=p[1])
             over.ground.append(s)
+            self.swamp_pool_list.append(s)
             self.swamp_pools.append((p[0], p[1], 82.0, 52.0))
         for i in range(140 * more):
             p = inside()
@@ -489,8 +491,13 @@ class Swamp:
             y = h.vy + (h.y - h.vy) * k
             s = self.project(x, y, 30 + 260 * 4 * k * (1 - k))
             if s:
-                arcade.draw_circle_filled(s[0], s[1], 11, (150, 80, 190, 240))
-                arcade.draw_circle_filled(s[0] - 3, s[1] + 3, 4, (230, 190, 255, 220))
+                z = 30 + 260 * 4 * k * (1 - k)
+                lit = getattr(self, "lit_col", None)       # view3d.py: dark at night like the rest
+                pod, spot = (150, 80, 190, 240), (230, 190, 255, 220)
+                if lit is not None:
+                    pod, spot = lit(pod, x, y, z, glow=0.2), lit(spot, x, y, z, glow=0.2)
+                arcade.draw_circle_filled(s[0], s[1], 11, pod)
+                arcade.draw_circle_filled(s[0] - 3, s[1] + 3, 4, spot)
 
     def swamp_visuals(self, dt):
         """Every computer, every frame: glowcaps glow while they're there, fireflies, the welcome note."""

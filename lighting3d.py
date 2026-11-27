@@ -29,11 +29,18 @@ How this fits with fx3d's light map (the half-resolution "multiply" over the fra
                black instead of to the fog colour (adding fog colour would brighten the screen).
   The data lives in one uniform buffer (LightBlock) bound to every program, so switching stages or
   updating the lights is one small buffer write - no per-program uniform calls, nothing rebuilt.
+
+Sun shadows (shadows3d.py draws the shadow map): lt_sunlit(p, n) in the fragment library says how much of
+the sun reaches a spot - 1 in the open, less in the shadow of a tree, wall or creature. Each lit shader
+multiplies its daylight shading by it, so a shadow takes away the direct sun but leaves the sky's light
+(shadows are never pitch black). lt_shk.x = 0 switches it off (night, underground, the option off, and the
+"glow" stage), and then the shadow map is never even read.
 """
 from array import array
 
 MAX_LIGHTS = 16
 BINDING = 5                 # uniform block binding point (shapes3d uses 3)
+SHADOW_UNIT = 6             # texture unit the sun's shadow map is bound to (shadows3d.py; 0-2 are taken)
 
 # sky / ground-bounce tints for the hemisphere ambient (around 1.0: the ambient's brightness is set by
 # each shader's own numbers, these only tint it)
@@ -47,6 +54,8 @@ FP_HORIZON = (178, 208, 232)           # first person: the sky colour at the hor
 GLSL = """
 layout (std140) uniform LightBlock {
     mat4 lt_inv;        // inverse of projection * view (fragment -> world position)
+    mat4 lt_shm;        // world position -> the sun's shadow map (shadows3d.py)
+    vec4 lt_shk;        // shadow: how dark (0 = off), world size of a map texel, 1 / depth range, taps
     vec4 lt_vp;         // viewport x, y, w, h
     vec4 lt_eye;        // camera position ; number of point lights
     vec4 lt_amb;        // ambient colour of this stage (1 = leave it to the light map)
@@ -113,7 +122,67 @@ vec3 lt_face(vec3 p) {
     vec3 n = normalize(cross(dFdx(p), dFdy(p)));
     return dot(n, lt_eye.xyz - p) < 0.0 ? -n : n;
 }
+uniform sampler2DShadow lt_shadow_map;
+// How much of the sun reaches p: 1 in the open, 0 deep in a shadow. n = surface normal, or vec3(0) for
+// flat cut-outs (no facing).
+float lt_sun_vis(vec3 p, vec3 n) {
+    vec3 L = lt_sun.xyz;
+    bool omni = dot(n, n) < 0.01;
+    float nl = omni ? 1.0 : dot(n, L);
+    // faces turned away from the sun are already shaded dark by their own lighting; adding the map's
+    // shadow on top would darken them twice (and that's where shadow "acne" lives)
+    if (nl <= 0.0) return 1.0;
+    // look the spot up a little off the surface (more at grazing angles) and a little nearer the sun in
+    // depth: a surface never shadows itself, and the offsets stay around a texel or two, so shadows still
+    // touch the feet of whatever casts them
+    float tx = lt_shk.y;
+    float tn = min(sqrt(max(1.0 - nl * nl, 0.0)) / max(nl, 0.05), 4.0);      // tan of the sun's angle
+    vec3 q = p + (omni ? L : n) * tx * (0.8 + 0.6 * tn);
+    vec4 s = lt_shm * vec4(q, 1.0);
+    vec3 uvz = s.xyz * 0.5 + 0.5;
+    vec2 e = min(uvz.xy, 1.0 - uvz.xy);
+    float edge = smoothstep(0.0, 0.07, min(e.x, e.y));      // fade out towards the map's edge
+    if (edge <= 0.0 || uvz.z >= 1.0) return 1.0;
+    float z = uvz.z - tx * (0.6 + 0.5 * tn) * lt_shk.z;
+    // percentage-closer filtering: each tap is already a 2 x 2 bilinear compare (hardware), so 3 x 3
+    // taps one texel apart give a soft edge with no stair steps (2 x 2 taps on the "low" setting)
+    vec2 st = vec2(1.0 / float(textureSize(lt_shadow_map, 0).x));
+    float acc = 0.0;
+    if (lt_shk.w > 4.5) {
+        for (int j = -1; j <= 1; j++)
+            for (int i = -1; i <= 1; i++)
+                acc += texture(lt_shadow_map, vec3(uvz.xy + vec2(float(i), float(j)) * st, z));
+        acc /= 9.0;
+    } else {
+        for (int j = 0; j < 2; j++)
+            for (int i = 0; i < 2; i++)
+                acc += texture(lt_shadow_map, vec3(uvz.xy + (vec2(float(i), float(j)) - 0.5) * st, z));
+        acc *= 0.25;
+    }
+    acc = mix(1.0, acc, smoothstep(0.0, 0.25, nl));        // no hard line where a face turns from the sun
+    return mix(1.0, acc, edge);
+}
+// what to multiply a surface's daylight by: 1 in the sun, 1 - lt_shk.x in full shadow
+float lt_sunlit(vec3 p, vec3 n) {
+    if (lt_shk.x <= 0.0) return 1.0;
+    return 1.0 - lt_shk.x * (1.0 - lt_sun_vis(p, n));
+}
 """
+
+
+def _allow_shadow_samplers():
+    """arcade's shader uniform table doesn't know shadow samplers (sampler2DShadow) and refuses to build a
+    program with one. It's set exactly like any other sampler (a texture unit number), so teach it that."""
+    try:
+        from arcade.gl.backends.opengl.uniform import Uniform
+        from pyglet import gl
+        table = Uniform._uniform_setters
+        table.setdefault(gl.GL_SAMPLER_2D_SHADOW, table[gl.GL_SAMPLER_2D])
+    except Exception as e:      # noqa: BLE001 - another arcade version: shadows3d.py turns itself off
+        print("lighting3d: can't register shadow samplers:", e)
+
+
+_allow_shadow_samplers()
 
 
 def glsl(frag=False):
@@ -131,15 +200,17 @@ def inject(src, frag=False):
 
 
 def bind(prog):
-    """Point a program's LightBlock at our buffer's binding (no-op if the program doesn't use it)."""
-    try:
-        prog["LightBlock"] = BINDING
-    except KeyError:
-        pass
+    """Point a program's LightBlock at our buffer's binding and its shadow map sampler at SHADOW_UNIT
+    (each a no-op if the program doesn't use it)."""
+    for name, v in (("LightBlock", BINDING), ("lt_shadow_map", SHADOW_UNIT)):
+        try:
+            prog[name] = v
+        except KeyError:
+            pass
 
 
 # ----------------------------------------------------------------- the buffer
-FLOATS = 16 + 4 * 10 + 8 * MAX_LIGHTS
+FLOATS = 32 + 4 * 11 + 8 * MAX_LIGHTS
 
 
 class LightState:
@@ -158,18 +229,22 @@ class LightState:
         self.fog = (0.7, 0.78, 0.86)
         self.fogk = (0.0, 0.0, 0.0)
         self.lights = []            # [(x, y, z, reach, r, g, b, wrap)]
+        self.shm = self.inv         # world -> shadow map (shadows3d.py)
+        self.shk = (0.0, 1.0, 0.0, 9.0)   # shadow darkness (0 = none), texel size, 1 / depth range, taps
 
     def write(self, stage):
         """Upload for one stage of the frame: "ground", "lit" or "glow" (see the module docstring)."""
         d = self.data
         d[0:16] = array("f", self.inv)
+        d[16:32] = array("f", self.shm)
         lit = stage == "lit"
+        shk = self.shk if stage != "glow" else (0.0,) + tuple(self.shk[1:])
         amb = self.amb if lit else (1.0, 1.0, 1.0)
         n = len(self.lights) if lit else 0
         fog = (0.0, 0.0, 0.0) if stage == "glow" else tuple(c * a for c, a in zip(self.fog, amb))
-        rows = (self.vp, self.eye + (float(n),), amb + (1.0,), SKY + (1.0,), GROUND + (1.0,), self.sun + (0.0,),
+        rows = (shk, self.vp, self.eye + (float(n),), amb + (1.0,), SKY + (1.0,), GROUND + (1.0,), self.sun + (0.0,),
                 self.fill + (0.0,), (self.rim if lit else (0.0, 0.0, 0.0)) + (0.0,), fog + (1.0,), self.fogk + (0.0,))
-        i = 16
+        i = 32
         for r in rows:
             d[i:i + 4] = array("f", r)
             i += 4

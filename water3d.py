@@ -15,6 +15,10 @@ What the water does, all on the GPU (time is a uniform, so nothing is rebuilt on
     run with the current.
   * Ponds are painted sprites (art.py): the pond shader keeps the painted sandy rim and lily pads exactly
     as they are, and only the blue water pixels get the ripples, sky and glints.
+  * The Mire's bog pools (swamp.py) are part of the ground, so the ground shader draws them; draw_bog then
+    goes over just their murky water pixels with the same ripples and glints (on the very same heightfield
+    triangles as the ground, so they sit exactly on the hills).
+  * Sun shadows (shadows3d.py) fall across all of it, like on the ground.
 
 The colours stay close to the old flat blue so the water still belongs to the low-poly painted world.
 Cost: one extra (tiny) program each for rivers and ponds; per water pixel a handful of noise lookups.
@@ -23,6 +27,10 @@ import time
 from array import array
 
 from arcade.gl import BufferDescription
+from pyglet import gl
+
+import lighting3d
+import terrain3d
 
 # The surface sits this far above the ground under it. Lying ON the ground (not sunk into it) matters on
 # hilly worlds, where the ground mesh is depth tested and would hide anything below it.
@@ -150,6 +158,7 @@ void main() {
         }
     }
     col = mix(col, FOAM, foam);
+    col *= lt_sunlit(v_pos, vec3(0.0, 0.0, 1.0));         // shadows3d.py: trees' shadows across the river
     float a = mix(0.7, 0.93, deep);
     a = max(a, foam) * smoothstep(0.0, 2.5, v_shore);    // soft edge into the mud bank
     f_color = vec4(col, a);
@@ -187,11 +196,18 @@ POND_FS = """
 #version 330
 uniform sampler2D sprite_texture;
 uniform vec4 spritelist_color;
+uniform int murky;          // 1: a bog pool (draw_bog) - murky green water, and only its water pixels
 in vec2 gs_uv;
 in vec4 gs_color;
 in vec3 gs_world;
 out vec4 f_color;
 %LIB%
+// a bog pool's open water: dark and a touch bluer than it is red (the muddy rim is redder, the lily pads and
+// green scum much greener)
+float bog(vec3 c) {
+    return smoothstep(0.0, 0.035, c.b - c.r) * (1.0 - smoothstep(0.12, 0.2, c.g - c.r))
+         * (1.0 - smoothstep(0.35, 0.5, max(c.g, c.b)));
+}
 // how sure we are this painted pixel is open water: a strong, deep blue. Pale ice and snow (tundra ponds in
 // winter), the sandy rim, lily pads and floating ice are much less blue for how bright they are, so they stay
 // exactly as painted.
@@ -202,9 +218,10 @@ float wet(vec3 c) {
 void main() {
     vec4 t = texture(sprite_texture, gs_uv);
     if (t.a <= 0.0) discard;
-    float w = wet(t.rgb);
+    float w = murky == 1 ? bog(t.rgb) : wet(t.rgb);
+    if (murky == 1 && w <= 0.01) discard;      // the ground shader already drew everything else
     vec3 body = t.rgb;
-    if (w < 0.99 && t.b - t.r > 0.08) {
+    if (murky == 0 && w < 0.99 && t.b - t.r > 0.08) {
         // the painted ripple lines are pale blue: with water on both sides they're water too (and take the
         // colour of the water round them - our own ripples replace them)
         vec2 px = 3.0 / vec2(textureSize(sprite_texture, 0));
@@ -220,12 +237,14 @@ void main() {
     if (w > 0.0) {
         float blend;
         vec3 rp = flowing(gs_world.xy, vec2(0.0), blend);
-        vec3 n = normalize(vec3(-rp.yz * 0.8, 1.0));
-        // the painted water (with its shading) is the body colour, pulled a little deeper; the ripples, sky
-        // and sun do the rest
-        col = mix(col, water_light(mix(body, vec3(0.10, 0.28, 0.41), 0.25), gs_world, n), w);
+        vec3 n = normalize(vec3(-rp.yz * (murky == 1 ? 0.5 : 0.8), 1.0));     // still, thick bog water
+        // the painted water (with its shading) is the body colour, pulled a little deeper (bog water stays
+        // its own murky green); the ripples, sky and sun do the rest
+        vec3 deep = murky == 1 ? body : mix(body, vec3(0.10, 0.28, 0.41), 0.25);
+        col = mix(col, water_light(deep, gs_world, n), w);
     }
-    f_color = vec4(col, t.a) * gs_color * spritelist_color;
+    col *= lt_sunlit(gs_world, vec3(0.0, 0.0, 1.0));      // shadows3d.py
+    f_color = vec4(col, t.a * (murky == 1 ? w : 1.0)) * gs_color * spritelist_color;
 }
 """
 
@@ -248,19 +267,31 @@ def geometry(game, data):
 
 # ---------------------------------------------------------------- drawing
 def _progs(game):
-    """(river program, pond program), made the first time they're needed."""
+    """(river program, pond program, start time, bog pool program), made the first time they're needed."""
     got = getattr(game, "_water3d", None)
     if got is None:
         import view3d
         ctx = game.ctx
-        river = ctx.program(vertex_shader=RIVER_VS, fragment_shader=RIVER_FS.replace("%LIB%", WATER_LIB))
+        river = ctx.program(vertex_shader=RIVER_VS,
+                            fragment_shader=lighting3d.inject(RIVER_FS.replace("%LIB%", WATER_LIB), frag=True))
         game._init3d()
         geo = view3d._SPRITE_IN.replace("%LIB%", game._mesh_lib) + POND_GEO_MAIN
-        pond = ctx.program(vertex_shader=game._mesh_vs, geometry_shader=geo,
-                           fragment_shader=POND_FS.replace("%LIB%", WATER_LIB))
-        pond["sprite_texture"] = 0
-        pond["uv_texture"] = 1
-        got = game._water3d = (river, pond, time.perf_counter())
+        pond_fs = lighting3d.inject(POND_FS.replace("%LIB%", WATER_LIB), frag=True)
+        pond = ctx.program(vertex_shader=game._mesh_vs, geometry_shader=geo, fragment_shader=pond_fs)
+        # bog pools: the ground's own heightfield geometry shader, passing the world position on
+        bog_geo = (terrain3d.GROUND_GEO.replace("%LIB%", game._mesh_lib + lighting3d.glsl())
+                   .replace("out vec4 gs_color;", "out vec4 gs_color;\nout vec3 gs_world;")
+                   .replace("gl_Position = mvp * vec4(p, z, 1.0);",
+                            "gs_world = vec3(p, z); gl_Position = mvp * vec4(p, z, 1.0);"))
+        bog = ctx.program(vertex_shader=game._mesh_vs, geometry_shader=bog_geo, fragment_shader=pond_fs)
+        for p in (pond, bog):
+            p["sprite_texture"] = 0
+            p["uv_texture"] = 1
+        pond["murky"] = 0
+        bog["murky"] = 1
+        for p in (river, pond, bog):
+            lighting3d.bind(p)
+        got = game._water3d = (river, pond, time.perf_counter(), bog)
     return got
 
 
@@ -278,7 +309,7 @@ def draw(game, geo):
     """Draw a river / lake mesh made by geometry() (with the 3D camera on, blending enabled)."""
     if geo is None:
         return
-    river, _, t0 = _progs(game)
+    river, _, t0, _ = _progs(game)
     _common(game, river, t0)
     geo.render(river)
 
@@ -287,7 +318,7 @@ def draw_ponds(game, lst):
     """Draw the ponds (painted sprites lying on the ground) with moving water. Replaces game.flat(L.ponds)."""
     if not len(lst):
         return
-    _, pond, t0 = _progs(game)
+    _, pond, t0, _ = _progs(game)
     _common(game, pond, t0)
     game.hill_apply(pond)          # HILLS (terrain3d.py): lie on the ground like the flat sprites do
     lst._init_deferred()
@@ -297,6 +328,30 @@ def draw_ponds(game, lst):
         lst.draw()
     finally:
         lst.data.program = old
+
+
+def draw_bog(game, lst):
+    """Moving water on the Mire's bog pools (swamp.py's swamp_pool_list). Call right after the ground: it
+    redraws only their water pixels, blended over what the ground shader painted there."""
+    if lst is None or not len(lst):
+        return
+    _, _, t0, bog = _progs(game)
+    _common(game, bog, t0)
+    bog["hill_max"] = game._hill_prog["hill_max"]
+    game.hill_apply(bog)
+    ctx = game.ctx
+    ctx.enable(ctx.BLEND)
+    # the same triangles as the ground under them: pull them a hair towards the camera so they always win
+    gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
+    gl.glPolygonOffset(-1.0, -2.0)
+    lst._init_deferred()
+    old = lst.data.program
+    lst.data.program = bog
+    try:
+        lst.draw()
+    finally:
+        lst.data.program = old
+        gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
 
 
 def flow_speed(hw, ford):

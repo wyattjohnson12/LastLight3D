@@ -859,7 +859,8 @@ class UI:
             later = "   (after a restart)" if smooth != getattr(self, "smooth_at_start", smooth) else ""
             return [f"Fullscreen:  {onoff(self.fullscreen)}   (F11)",
                     f"Smooth edges:  {onoff(smooth)}{later}",
-                    f"Glow effects:  {onoff(self.post_wanted())}", "Back"]
+                    f"Glow effects:  {onoff(self.post_wanted())}",
+                    f"Sun shadows:  {self.shadows_mode().capitalize()}", "Back"]
         if self.menu == "local":
             return []
         if self.menu == "diff":
@@ -966,13 +967,15 @@ class UI:
                 self.menu, self.menu_sel, self.menu_note = "gfx", 0, ""
             else:
                 arcade.exit()
-        elif self.menu == "gfx":        # post3d.py: smooth edges (MSAA) and glow (bloom)
+        elif self.menu == "gfx":        # post3d.py: smooth edges (MSAA) and glow (bloom); shadows3d.py: shadows
             if i == 0:
                 self.toggle_fullscreen()
             elif i == 1:
                 self.toggle_smooth()
             elif i == 2:
                 self.toggle_glow()
+            elif i == 3:
+                self.toggle_shadows()
             else:
                 self.menu_back()
         elif self.menu == "diff":
@@ -1114,8 +1117,9 @@ class UI:
                      W / 2, 46, (160, 160, 160), 11, anchor_x="center")
         elif self.menu == "gfx":
             self.txt("t6", "Smooth edges: no jagged edges (restart to change).   Glow: fires, crystals and eyes "
-                     "shine at night.   Turn off if the game is slow.", W / 2, 46,
-                     (160, 160, 160), 11, anchor_x="center")
+                     "shine at night.", W / 2, 46, (160, 160, 160), 11, anchor_x="center")
+            self.txt("t7", "Sun shadows: trees, walls and creatures cast real shadows by day.   Turn things off "
+                     "(or shadows to Low) if the game is slow.", W / 2, 28, (160, 160, 160), 11, anchor_x="center")
         elif self.menu == "confirm":
             self.txt("t6", "ESC / B = keep it", W / 2, 46, (160, 160, 160), 11, anchor_x="center")
         else:

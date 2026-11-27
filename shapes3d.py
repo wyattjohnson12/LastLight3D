@@ -98,6 +98,7 @@ uniform float inflate;      // armor worn over a body
 uniform vec2 sun;           // shadow direction (light comes from the other side)
 uniform float time;         // wind
 uniform int glow_pass;      // 1: only the glowing parts, added on top of the night
+uniform int coarse;         // 1: leave out the small extras, as far away (the shadow pass: cheaper)
 %PASSUNI%
 in float v_angle[];
 in vec4 v_color[];
@@ -177,7 +178,7 @@ void main() {
             vec4 A = pa[p], B = pb[p], C = pc[p], D = pd[p], E = pe[p];
             mode = int(D.w);
             glow = C.w;
-            skip = (glow_pass == 1 && glow <= 0.0) || (E.w > 0.5 && q.w > 1500.0);
+            skip = (glow_pass == 1 && glow <= 0.0) || (E.w > 0.5 && (q.w > 1500.0 || coarse == 1));
             vec4 col = vec4(D.rgb, 1.0);
             if (mode == 1 || mode == 2) {
                 vec4 s = pick(D.xy);
@@ -268,7 +269,8 @@ void main() {
         rgb = lt_fogged(rgb * gs_shade, p);
     } else {
         vec3 n = lt_face(p);
-        rgb = rgb * gs_shade * lt_hemi(n) * lt_light(p, n) + 0.5 * lt_rimlight(p, n) * (0.3 + rgb);
+        float sun = gs_shade * lt_sunlit(p, n);         // in the shadow of something else (shadows3d.py)
+        rgb = rgb * sun * lt_hemi(n) * lt_light(p, n) + 0.5 * lt_rimlight(p, n) * (0.3 + rgb);
         rgb = lt_fogged(rgb, p);
     }
     f_color = vec4(rgb, col.a) * spritelist_color;
@@ -276,10 +278,27 @@ void main() {
 """
 
 
-def program_sources(lib, invocations=None, verts=MAX_VERTS):
+# The shadow pass (shadows3d.py): the same geometry shader seen from the sun, writing only depth. Picture
+# pixels that are see-through (and not filled, like foliage) let the sun through, as they do on screen.
+SHADOW_FS = """
+#version 330
+uniform sampler2D sprite_texture;
+uniform vec4 spritelist_color;
+uniform float alpha_cut;
+in vec2 gs_uv;
+flat in uint gs_fill;
+void main() {
+    if (spritelist_color.a <= 0.0) discard;
+    if (gs_uv.x > -5.0 && (gs_fill >> 24) < 128u && texture(sprite_texture, gs_uv).a <= alpha_cut) discard;
+}
+"""
+
+
+def program_sources(lib, invocations=None, verts=MAX_VERTS, shadow=False):
     """GLSL for the shape program. invocations=n (OpenGL 4.0+): one draw call does all n passes of a shape.
     invocations=None: plain 3.3 - the caller draws once per pass with the `pass_id` uniform.
-    verts: the most vertices one pass emits (smaller = cheaper on GPUs that emulate geometry shaders)."""
+    verts: the most vertices one pass emits (smaller = cheaper on GPUs that emulate geometry shaders).
+    shadow: the depth-only version for the sun's shadow map (shadows3d.py)."""
     geo = MESH_GEO
     if invocations:
         geo = geo.replace("%VER%", "410").replace("%INV%", f", invocations = {invocations}")
@@ -289,7 +308,7 @@ def program_sources(lib, invocations=None, verts=MAX_VERTS):
         geo = geo.replace("%PASS%", "pass_id").replace("%PASSUNI%", "uniform int pass_id;")
     geo = (geo.replace("%LIB%", lib).replace("%VERTS%", str(verts)).replace("%RINGS%", str(MAX_RINGS))
            .replace("%PARTS%", str(MAX_PARTS)).replace("%BANDS2%", str(MAX_BANDS // 2)).replace("%INVS%", str(MAX_INV)))
-    return geo, lighting3d.inject(MESH_FS, frag=True)
+    return geo, SHADOW_FS if shadow else lighting3d.inject(MESH_FS, frag=True)
 
 
 # =========================================================================== building blocks
