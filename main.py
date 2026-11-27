@@ -36,6 +36,7 @@ import intro
 import local_coop
 import net
 import options
+import post3d
 import pets
 import progress
 import repair
@@ -143,10 +144,20 @@ class Survivor:
 
 
 # =========================================================================== game
-class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
+class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, post3d.Post3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
                 progress.Progress, weather.Weather, defenses.Defenses, swamp.Swamp, ui.UI, arcade.Window):
     def __init__(self):
-        super().__init__(W, H, SCREEN_TITLE)
+        # "Smooth edges" (MSAA, options in post3d.py): arcade asks for 4 samples and quietly skips them if the
+        # driver has none. Some drivers say yes and then fail to make the window - then try again without.
+        smooth = load_config().get("smooth_edges", True) is not False
+        try:
+            super().__init__(W, H, SCREEN_TITLE, antialiasing=smooth)
+        except Exception as e:      # noqa: BLE001 - never fail to start over an extra
+            if not smooth:
+                raise
+            print("Smooth edges aren't available on this computer - starting without them.", e)
+            super().__init__(W, H, SCREEN_TITLE, antialiasing=False)
+        self.smooth_at_start = smooth     # the options screen says "after a restart" if it is changed
         self.background_color = (24, 34, 22)
         self.camera = arcade.Camera2D()
         self.gui = arcade.Camera2D()
@@ -2994,7 +3005,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             step = 30 if modifiers & arcade.key.MOD_SHIFT else 5
             self.diff_adjust(self.menu_sel, step if key in (arcade.key.RIGHT, arcade.key.D) else -step)
             return
-        if key == arcade.key.ESCAPE and self.menu in ("diff", "load", "save", "confirm", "ach", "summary"):
+        if key == arcade.key.ESCAPE and self.menu in ("diff", "load", "save", "confirm", "ach", "summary", "gfx"):
             self.menu_back()
             return
         if self.menu == "load" and key in (arcade.key.DELETE, arcade.key.BACKSPACE):
@@ -3191,7 +3202,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
                     self._stick_x = 0.2
                 elif abs(lx) < 0.3:
                     self._stick_x = 0
-            if "b" in pr and self.menu in ("diff", "load", "save", "confirm", "ach", "summary"):
+            if "b" in pr and self.menu in ("diff", "load", "save", "confirm", "ach", "summary", "gfx"):
                 self.menu_back()
                 return
             if "x" in pr and self.menu == "load":
