@@ -82,6 +82,8 @@ class Biome:
     Looks (every computer, visual only - the global random is fine here):
       fog                           (r, g, b, a) screen haze while the viewer stands in this biome
       ambient(game, dt, x, y)       every frame on every computer while the viewer is in this biome (particles)
+      visuals(game, dt)             every frame on every computer, wherever the viewer is (seasonal looks,
+                                    effects that reach past the biome's border). Visual / shared-world only.
     Terrain (every computer, must be pure functions of the world):
       height(game, x, y)            -> ground height in px (summed over all modules; 0 = flat)
       blocked(game, x, y, layer)    -> True if nobody can walk there (cliff faces, deep water)
@@ -93,7 +95,7 @@ class Biome:
     """
 
     HOOKS = ("gen_surface", "gen_layers", "ground", "decor", "keepout", "respawn_variant", "sample", "zombie", "update",
-             "player_tick", "speed", "ambient", "height", "blocked", "water", "speed_at")
+             "player_tick", "speed", "ambient", "visuals", "height", "blocked", "water", "speed_at")
 
     def __init__(self, name, title="", order=100, region=True, legacy=False, tint=(255, 255, 255), density=None,
                  node_kinds=(), forbid=(), animals=None, fog=None, **hooks):
@@ -475,7 +477,11 @@ class BiomeWorld:
             b.update(self, dt)
 
     def biome_ambient(self, dt):
-        """Every computer, every frame: the viewer's biome particles."""
+        """Every computer, every frame: every module's `visuals`, then the viewer's biome particles."""
+        for b in with_hook("visuals"):
+            if self.worldgen == LEGACY and not b.legacy:
+                continue
+            b.visuals(self, dt)
         if self.view_layer != "over":
             return
         x, y = self.view_pos()
@@ -513,8 +519,16 @@ class BiomeWorld:
         return info.zombie(self, random.random() if roll is None else roll)
 
     def animal_weights(self, pos):
+        """{kind: weight} for a wild animal spawning at pos. Animals with a "home" biome in settings.ANIMALS
+        (e.g. the tundra's snow foxes) never spawn anywhere else unless that biome lists them."""
         b = get(self.biome_at(pos))
-        return b.animals if b.animals is not None else get("forest").animals
+        w = b.animals if b.animals is not None else get("forest").animals
+        homed = [k for k, v in ANIMALS.items() if v.get("home") and k not in w]
+        if homed:
+            w = dict(w)
+            for k in homed:
+                w[k] = 0
+        return w
 
     # --- resources
     def node_allowed(self, kind, p):

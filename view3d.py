@@ -371,8 +371,10 @@ class View3D(fx3d.FX3D):
                 for sub in got[2].values():
                     sub.clear()
             groups = {}
+            variants = getattr(shapes3d, "VARIANT_SHAPES", {})     # e.g. tundra pines: ("tree", 20) -> "pine"
             for s in lst:
                 kind = getattr(s, "kind", "")
+                kind = variants.get((kind, getattr(s, "variant", None)), kind)
                 if kind not in groups:
                     groups[kind] = arcade.SpriteList()
                 groups[kind].append(s)
@@ -564,7 +566,7 @@ class View3D(fx3d.FX3D):
             inside = hsp is my_hut or any(p.in_hut is hsp for p in self.players.values())
             hsp.alpha = 110 if inside else 255
         self.mesh(L.huts, "hut")
-        self.draw_kinds(L.trees)
+        self.draw_kinds(L.trees, getattr(self, "moves_ver", 0))    # regrown trees can change shape (variant)
         if fp:
             self.fp_hide_me(False)
 
