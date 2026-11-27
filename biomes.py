@@ -84,6 +84,8 @@ class Biome:
       ambient(game, dt, x, y)       every frame on every computer while the viewer is in this biome (particles)
       visuals(game, dt)             every frame on every computer, wherever the viewer is (seasonal looks,
                                     effects that reach past the biome's border). Visual / shared-world only.
+      draw3d(game, L, vl)           every computer, every 3D frame (depth test on, after the trees): draw your own
+                                    SpriteLists, e.g. game.mesh(my_list, "my_shape") for solid non-node props
     Terrain (every computer, must be pure functions of the world):
       height(game, x, y)            -> ground height in px (summed over all modules; 0 = flat)
       blocked(game, x, y, layer)    -> True if nobody can walk there (cliff faces, deep water)
@@ -95,7 +97,7 @@ class Biome:
     """
 
     HOOKS = ("gen_surface", "gen_layers", "ground", "decor", "keepout", "respawn_variant", "sample", "zombie", "update",
-             "player_tick", "speed", "ambient", "visuals", "height", "blocked", "water", "speed_at")
+             "player_tick", "speed", "ambient", "visuals", "height", "blocked", "water", "speed_at", "draw3d")
 
     def __init__(self, name, title="", order=100, region=True, legacy=False, tint=(255, 255, 255), density=None,
                  node_kinds=(), forbid=(), animals=None, fog=None, **hooks):
@@ -505,6 +507,11 @@ class BiomeWorld:
         b = get(self.biome_at((x, y)))
         if b.ambient is not None:
             b.ambient(self, dt, x, y)
+
+    def biome_draw3d(self, L, vl):
+        """Every computer, inside view3d.draw_world_3d: plug-ins draw their own 3D props (non-node sprites)."""
+        for b in with_hook("draw3d"):
+            b.draw3d(self, L, vl)
 
     def biome_fog(self):
         """(r, g, b, a) haze for where the viewer stands, blended over the borders; None = none."""

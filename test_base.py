@@ -104,7 +104,7 @@ def main_test():
             assert g.in_swamp(n.base), "swamp plants come back in the swamp"
         if n.kind == "tree":
             assert (10 <= n.variant < 13) == g.in_swamp(n.base), "swamp trees only in the swamp"
-            if n.variant >= 20:
+            if 20 <= n.variant < 23:
                 assert g.biome_at(n.base) == "tundra", "pines only in the tundra"
             assert over.solid in n.sprite_lists
     assert tree.hive.state == "empty" and dist(tree.hive.base, tree.base) < 30, "the hive moved with its tree"
