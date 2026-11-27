@@ -7,10 +7,12 @@ CAM_PITCH_DEG = 52         # how steeply the camera looks down (90 = straight do
 CAM_FOV_DEG = 50           # vertical field of view
 CAVE_WALL_HEIGHT = 95      # how tall cave walls are
 BUILD_WALL_HEIGHT = 60     # how tall the walls you build are
-WORLD_SIZE = 3200          # the surface map is WORLD_SIZE x WORLD_SIZE pixels
+WORLD_SIZE = 3200          # the LEGACY (worldgen 1) surface size. Each world has its own: game.world_size /
+                           # layer.size (biomes.WORLD_SIZES) - don't use WORLD_SIZE in new code
 CAVE_SIZE = 2400           # the underground map
 CAVE_CELL = 60             # cave walls are built from cells this big
 CAVE_ENTRANCES = 3
+CAVE_ENTRANCES_V2 = 5      # worldgen 2 (the big map)
 GRID = 40                  # building snap grid
 
 # ----------------------------------------------------------------- player

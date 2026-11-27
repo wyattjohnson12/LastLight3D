@@ -59,14 +59,14 @@ class UI:
         pos = self.view_pos()
         torch = me is not None and me.alive and me.holding_torch
         fire = self.near_fire(pos, vl, 150)
-        if vl == "cave":
+        if vl != "over":
             return 280 if fire else 260 if torch else 150
         return 300 if fire else 330 if torch else 240
 
     def on_draw(self):
         vl = self.view_layer
         L = self.layers[vl]
-        bg = (6, 6, 9) if vl == "cave" else (24, 34, 22)
+        bg = (6, 6, 9) if vl != "over" else (24, 34, 22)
         if getattr(self, "_split", False):     # local split screen: only paint this player's slice
             self.gui.use()
             arcade.draw_lrbt_rectangle_filled(0, W, 0, H, bg)
@@ -262,7 +262,7 @@ class UI:
                      anchor_x="right")
             y -= 16
         y = self.draw_weather_hud(y)     # weather.py: season + weather
-        if self.view_layer == "cave":
+        if self.view_layer != "over":
             self.txt("cavetag", "UNDERGROUND", W - 18, y, (190, 170, 255), 11, anchor_x="right", bold=True)
             y -= 16
         if self.net:

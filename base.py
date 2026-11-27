@@ -197,19 +197,12 @@ class Base:
 
     def _spot_candidate(self, n, L):
         r = random
-        if n.layer == "cave":
+        if n.layer != "over":          # underground layers: somewhere on the open floor
             if not len(L.ground):
                 return None
             g = L.ground[r.randrange(len(L.ground))]
             return g.center_x + r.uniform(-8, 8), g.center_y + r.uniform(-8, 8)
-        if n.kind in ("reeds", "glowcap"):
-            blobs = getattr(self, "swamp_blobs", None)
-            if not blobs:
-                return None
-            x, y, rad = r.choice(blobs)
-            a, d = r.uniform(0, math.tau), math.sqrt(r.random()) * max(10, rad - 20)
-            return x + math.cos(a) * d, y + math.sin(a) * d
-        return r.uniform(100, L.size - 100), r.uniform(100, L.size - 100)
+        return self.node_spot_candidate(n.kind, r)    # biomes.py: biome-only kinds sample their own biome
 
     def spot_ok(self, kind, layer, p, rad=None, ignore=None):
         """Could a `kind` node grow at p? Not in a base, not near survivors, buildings, nodes or cleared spots."""
@@ -232,10 +225,11 @@ class Base:
                 return False
             if any(_dist(p, e) < 150 for e in exits):
                 return False
-            swampy = self.in_swamp(p)
-            if kind in ("reeds", "glowcap") and not swampy:
+            if not self.node_allowed(kind, p):      # biomes.py: e.g. reeds/glowcaps only in the Mire
                 return False
-            if swampy and self.in_bog_pool(p):
+            if self.in_swamp(p) and self.in_bog_pool(p):
+                return False
+            if self.terrain_blocked(x, y, layer) or self.terrain_water(x, y, layer):
                 return False
         else:
             near = min((_dist(p, e) for e in exits), default=9999)
@@ -244,7 +238,7 @@ class Base:
         side = int(2 * rad + (52 if layer == "over" else 30))
         probe = arcade.SpriteSolidColor(side, side, center_x=x, center_y=y)
         lists = [L.solid, L.trees, L.rocks, L.bushes, L.builds, L.huts, L.traps, L.exits, L.ponds]
-        if layer == "cave":
+        if layer != "over":
             lists.append(L.walls)
         hits = arcade.check_for_collision_with_lists(probe, lists)
         return not any(h is not ignore for h in hits)
@@ -252,7 +246,7 @@ class Base:
     def find_node_spot(self, n):
         """A random good spot for a used-up node to turn up again: (x, y) or None."""
         L = self.layers[n.layer]
-        for _ in range(SPOT_TRIES * (4 if n.layer == "cave" else 1)):    # caves are cramped: look harder
+        for _ in range(SPOT_TRIES * (4 if n.layer != "over" else 1)):    # caves are cramped: look harder
             p = self._spot_candidate(n, L)
             if p and self.spot_ok(n.kind, n.layer, p, ignore=n):
                 return p
@@ -285,11 +279,9 @@ class Base:
     def respawn_node(self, n, x, y):
         """Host: a used-up node grows again at (x, y)."""
         variant = None
-        if n.kind == "tree":
-            from swamp import SWAMP_TREE
-            swampy = self.in_swamp((x, y))
-            variant = (SWAMP_TREE if swampy else 0) + random.randint(0, 2)
-            n.base_angle = 0.0 if swampy else random.uniform(0, 360)
+        look = self.node_respawn_look(n, x, y) if n.layer == "over" else None   # biomes.py (swamp trees...)
+        if look is not None:
+            variant, n.base_angle = look
         self.place_node(n, x, y, variant)
         n.hp = NODES[n.kind]["hp"]
         n.timer = 0.0

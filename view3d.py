@@ -492,10 +492,10 @@ class View3D(fx3d.FX3D):
         ctx = self.ctx
         view = self.view_pos()
         self._trees(L, view)
-        cave_geo = self._cave_walls(L) if vl == "cave" else None
+        cave_geo = self._cave_walls(L) if vl != "over" else None   # any underground layer
         built_geo = self._built_walls(L)
         self.fx_tick()               # fx3d.py: particles move once per frame (not once per split view)
-        dk = 0.93 if vl == "cave" else self.darkness
+        dk = self.layer_dark(vl) if vl != "over" else self.darkness   # biomes.LAYER_INFO
         sx, sy, shade = fx3d.sun(self.phase if vl == "over" else 0.27, dk)
         bill = self._progs3d[1]
         bill["sun"] = (sx, sy)
@@ -537,7 +537,7 @@ class View3D(fx3d.FX3D):
         if built_geo:
             built_geo.render(box)
             self.flat(L.builds, BUILD_WALL_HEIGHT, boxes=True)
-        if vl == "cave":
+        if vl != "over":
             self.stand(L.exits)
         self.draw_kinds(L.bushes)
         self.draw_kinds(L.rocks)
@@ -623,7 +623,7 @@ class View3D(fx3d.FX3D):
                     arcade.draw_circle_filled(p.sprite.center_x, p.sprite.center_y, 30, p.color + (int(70 * dk),))
             for b in L.bosses:     # bosses are always visible - terrifying silhouettes
                 arcade.draw_circle_filled(b.center_x, b.center_y, b.radius + 30, (255, 80, 40, int(40 * dk)))
-            if vl == "cave":
+            if vl != "over":
                 for s in L.exits:
                     arcade.draw_circle_filled(s.center_x, s.center_y, 60, (255, 240, 200, 40))
         self.use_world3d()           # embers, sparks and flames glow on top of the night

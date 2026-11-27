@@ -22,6 +22,8 @@ import sys
 import arcade
 
 import swamp  # noqa: F401  (first: adds the Mire's items, recipes and boss before ui.py reads them)
+import biomes  # noqa: E402  (biome registry; then every biome / terrain / layer plug-in registers itself)
+biomes.load_plugins()
 import base  # noqa: F401  (also early: adds the Base Flag recipe before ui.py reads the tabs)
 import art
 import art_bees
@@ -141,7 +143,7 @@ class Survivor:
 
 
 # =========================================================================== game
-class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
+class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
                 progress.Progress, weather.Weather, defenses.Defenses, swamp.Swamp, ui.UI, arcade.Window):
     def __init__(self):
         super().__init__(W, H, SCREEN_TITLE)
@@ -199,12 +201,21 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
         super().on_close()
 
     # ------------------------------------------------------------------ setup
-    def setup(self, seed):
+    def setup(self, seed, worldgen=None):
+        """Build the world from its seed. worldgen: biomes.LEGACY for old saves / old hosts, None = newest."""
         self.seed = seed
-        self.layers, self.nodes, self.links = build_world(seed)
+        self.worldgen = int(worldgen or biomes.WORLDGEN)
+        self.layout = biomes.make_layout(seed, self.worldgen, self)
+        self.world_size = self.layout.size
+        self.layers, self.nodes, self.links = build_world(seed, self.worldgen, self.layout)
         self.over, self.cave = self.layers["over"], self.layers["cave"]
+        self.node_spans = {"base": [0, len(self.nodes)]}
         self.build_swamp()         # swamp.py: the Mire (only adds nodes at the end, so saves still line up)
-        self.centre = (WORLD_SIZE / 2, WORLD_SIZE / 2)
+        self.node_spans["mire"] = [self.node_spans["base"][1], len(self.nodes) - self.node_spans["base"][1]]
+        self.portals = [("over", tuple(a), "cave", tuple(b)) for a, b in self.links]
+        biomes.generate(self)      # biomes.py: every plug-in's content, in a fixed order, own random streams
+        self.animal_cap = int(ANIMAL_CAP * min(2.0, biomes.area_scale(self.worldgen)))
+        self.centre = (self.world_size / 2, self.world_size / 2)
         self.player_list = arcade.SpriteList()
         self.held_list = arcade.SpriteList()
         self.cloak_list = arcade.SpriteList()     # worn cloaks (drawn under the survivors)
@@ -701,15 +712,14 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
         ex = self.near_exit(p)
         if not ex:
             return
-        for surf, cave in self.links:
-            if p.layer == "over" and dist(ex.position, surf) < 5:
-                self.set_layer(p, "cave", (cave[0] + 45, cave[1]))
-                self.say("UNDERGROUND. It's cold and dark - bring a torch. Ore and crystal down here!", 5, to=p)
-                break
-            if p.layer == "cave" and dist(ex.position, cave) < 5:
-                self.set_layer(p, "over", (surf[0] + 60, surf[1]))
-                self.say("Back to the surface.", 2, to=p)
-                break
+        far = self.portal_from(p.layer, ex.position)     # biomes.py: over <-> cave, cave <-> deep, ...
+        if far is not None:
+            layer, (x, y) = far
+            down = biomes.depth(layer) > biomes.depth(p.layer)
+            msg = biomes.LAYER_INFO[layer].enter if down else biomes.LAYER_INFO[p.layer].leave
+            self.set_layer(p, layer, (x + (60 if layer == "over" else 45), y))
+            if msg:
+                self.say(msg, 5 if down else 2, to=p)
         p.tp += 1
         self.play("travel", 0.3, to=p)
 
@@ -1031,7 +1041,7 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
             by = self.players.get(s.owner)
             self.fx_layer = s.layer
             if s.kind == "arrow":
-                if s.layer == "cave" and arcade.get_sprites_at_point((s.x, s.y), L.walls):
+                if s.layer != "over" and arcade.get_sprites_at_point((s.x, s.y), L.walls):
                     s.done = True
                     continue
                 sp = math.hypot(s.vx, s.vy) or 1
@@ -1168,8 +1178,8 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
             return None
         if kind is None:
             roll = random.random()
-            if layer == "cave":
-                kind = "golem" if roll < 0.18 + 0.02 * self.day else "crawler"
+            if layer != "over":
+                kind = self.layer_zombie_kind(layer, roll)    # biomes.LAYER_INFO[layer].zombie
             else:
                 kind = "walker"
                 if self.day >= 3 and roll < 0.08 + 0.03 * self.day:
@@ -1189,10 +1199,10 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
                     continue
             if not (60 < x < L.size - 60 and 60 < y < L.size - 60):
                 continue
-            z = Zombie(self.swamp_zombie_kind(kind, x, y, layer), x, y, self.next_zid, layer)
+            z = Zombie(self.biome_zombie_kind(kind, x, y, layer), x, y, self.next_zid, layer)   # biomes.py
             if arcade.check_for_collision_with_lists(z, [L.solid, L.huts]):
                 continue
-            if layer == "cave" and not arcade.get_sprites_at_point((x, y), L.ground):
+            if layer != "over" and not arcade.get_sprites_at_point((x, y), L.ground):
                 continue
             self.next_zid += 1
             self.add_zombie(z)
@@ -1229,7 +1239,7 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
         for i in range(30):
             a = random.uniform(0, math.tau)
             x, y = anchor[0] + math.cos(a) * 560, anchor[1] + math.sin(a) * 560
-            if not (150 < x < WORLD_SIZE - 150 and 150 < y < WORLD_SIZE - 150):
+            if not (150 < x < self.world_size - 150 and 150 < y < self.world_size - 150):
                 continue
             b = Boss(kind, x, y, self.next_bid, cycle)
             if arcade.check_for_collision_with_lists(b, [self.over.solid, self.over.huts]) and i < 25:
@@ -1276,8 +1286,8 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
             b.flash = max(0, b.flash - dt)
             dx, dy = b.charge_dir
             speed = b.speed * 2.4 * min(1.0, b.state_t / 0.6)     # turns, then bolts
-            b.center_x = max(40, min(WORLD_SIZE - 40, b.center_x + dx * speed * dt))
-            b.center_y = max(40, min(WORLD_SIZE - 40, b.center_y + dy * speed * dt))
+            b.center_x = max(40, min(self.world_size - 40, b.center_x + dx * speed * dt))
+            b.center_y = max(40, min(self.world_size - 40, b.center_y + dy * speed * dt))
             b.heading = math.atan2(dy, dx)
             b.wobble += dt * 8
             b.angle = -math.degrees(b.heading) + math.sin(b.wobble) * 6
@@ -1396,11 +1406,14 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
                 self._update_defenses(dt)     # defenses.py: turrets shoot
                 self._update_world(dt)
                 self.update_swamp(dt)      # swamp.py: the Drowned rise at night
+                self.biome_update(dt)      # biomes.py: every plug-in's per-frame logic
         else:
             if not self.cut:
                 self.clock += dt * self.clock_rate() * (8 if self.fast_forward else 1)
             self._client_visuals(dt)
         self.weather_tick(dt)      # weather.py
+        if self.state == "playing":
+            self.biome_ambient(dt)     # biomes.py: the viewer's biome particles
         self._update_visuals(dt)
         if self.local:
             self.local_cameras(dt)
@@ -1469,6 +1482,7 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
         if p.warmth <= 0:
             speed *= 0.75
         speed *= self.swamp_speed(p, dt)     # swamp.py: mud, bog pools, grasping roots
+        speed *= self.biome_speed(p)         # biomes.py: biome + terrain (snow, hills...)
         speed *= 1 + p.gear("speed")         # light armor (Chitin Armor) makes you quicker
         if moving:
             n = max(1.0, math.hypot(dx, dy))
@@ -1476,7 +1490,15 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
             p.sprite.change_y = dy / n * speed * dt
         else:
             p.sprite.change_x = p.sprite.change_y = 0
+        ox, oy = p.sprite.center_x, p.sprite.center_y
         p.physics.update()
+        if biomes.with_hook("blocked") and self.terrain_blocked(p.sprite.center_x, p.sprite.center_y, p.layer):
+            if not self.terrain_blocked(p.sprite.center_x, oy, p.layer):     # slide along cliffs / rivers
+                p.sprite.center_y = oy
+            elif not self.terrain_blocked(ox, p.sprite.center_y, p.layer):
+                p.sprite.center_x = ox
+            else:
+                p.sprite.center_x, p.sprite.center_y = ox, oy
         size = self.layers[p.layer].size
         p.sprite.center_x = max(20, min(size - 20, p.sprite.center_x))
         p.sprite.center_y = max(20, min(size - 20, p.sprite.center_y))
@@ -1527,12 +1549,15 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
                 self.spawn_zombie("over")
                 self.over.spawn_timer = max(0.7, 3.2 - 0.35 * self.day) * random.uniform(0.6, 1.3) / \
                     (1 + 0.5 * (n_over - 1))
-        n_cave = len(self.alive_players("cave"))
-        if n_cave:
-            self.cave.spawn_timer -= dt
-            if self.cave.spawn_timer <= 0 and len(self.cave.zombies) < 5 + 3 * n_cave + self.day:
-                self.spawn_zombie("cave")
-                self.cave.spawn_timer = random.uniform(2.5, 5.0) / n_cave
+        for L in self.layers.values():          # underground layers (cave, deep...): always dark, always hungry
+            if L.name == "over":
+                continue
+            n_cave = len(self.alive_players(L.name))
+            if n_cave:
+                L.spawn_timer -= dt
+                if L.spawn_timer <= 0 and len(L.zombies) < 5 + 3 * n_cave + self.day:
+                    self.spawn_zombie(L.name)
+                    L.spawn_timer = random.uniform(2.5, 5.0) / n_cave
 
     def base_spot(self):
         for kind in ("base_flag", "hut", "storage", "workbench"):
@@ -1624,11 +1649,12 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
             p.health += NATURAL_REGEN_PER_SEC * dt
 
         # temperature: night and caves are cold; fire, huts, torches and clothes keep you warm
-        if p.layer == "cave":
-            cold = CAVE_COLD_PER_SEC
+        if p.layer != "over":
+            cold = self.layer_cold(p.layer)      # biomes.LAYER_INFO (the cave: CAVE_COLD_PER_SEC)
         else:
             cold = COLD_PER_SEC * self.darkness * self.cold_mult
         cold += self.weather_survivor(p, dt)   # weather.py: winter nights, snow, rain
+        cold += self.biome_survivor(p, dt)     # biomes.py: tundra chill, ash heat, hazards...
         cold = max(0.0, cold - p.gear("warmth") * WARMTH_PER_GEAR_POINT)
         warm = 0.0
         if self.near_fire(p.pos, p.layer):
@@ -1794,14 +1820,15 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
     # ------------------------------------------------------------------ animals & pets
     def spawn_animal(self):
         alive = self.alive_players("over")
-        weights = {"rabbit": 5, "deer": 3, "boar": 3, "wolf": 2, "bee": 4}
-        kind = random.choices(list(ANIMALS), [weights.get(k, 2) for k in ANIMALS])[0]
-        if kind == "bee":
-            return self.spawn_bee(alive)
+        S = self.world_size
         for _ in range(20):
-            x, y = random.uniform(150, WORLD_SIZE - 150), random.uniform(150, WORLD_SIZE - 150)
+            x, y = random.uniform(150, S - 150), random.uniform(150, S - 150)
             if any(dist((x, y), p.pos) < 550 for p in alive) or self.in_base((x, y)):
                 continue
+            weights = self.animal_weights((x, y))      # biomes.py: each biome has its own wildlife
+            kind = random.choices(list(ANIMALS), [weights.get(k, 2) for k in ANIMALS])[0]
+            if kind == "bee":
+                return self.spawn_bee(alive)
             a = Animal(kind, x, y, self.next_aid)
             if arcade.check_for_collision_with_lists(a, [self.over.solid, self.over.huts]):
                 continue
@@ -1835,7 +1862,7 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
         self.animal_t -= dt
         if self.animal_t <= 0:
             self.animal_t = 4.0
-            if len(wild) < ANIMAL_CAP and not self.is_night:
+            if len(wild) < self.animal_cap and not self.is_night:
                 self.spawn_animal()
         blockers = [L.solid, L.huts]
         players_over = self.alive_players("over")
@@ -1861,8 +1888,8 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
                     a.detour_dir = (-vy * side, vx * side)
                     a.detour = random.uniform(0.4, 0.9)
                 a.heading = math.atan2(vy, vx)
-                a.center_x = max(40, min(WORLD_SIZE - 40, a.center_x))
-                a.center_y = max(40, min(WORLD_SIZE - 40, a.center_y))
+                a.center_x = max(40, min(self.world_size - 40, a.center_x))
+                a.center_y = max(40, min(self.world_size - 40, a.center_y))
             a.angle = -math.degrees(a.heading)
             if not a.pet and self.is_night and self.darkness > 0.9 and random.random() < dt * 0.01:
                 self.amap.pop(a.aid, None)   # wild animals slowly bed down for the night
@@ -2116,8 +2143,8 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
                     elif blocked and not built:   # shoulder through trees and rocks
                         b.center_x += vx * step * 0.6
                         b.center_y += vy * step * 0.6
-                b.center_x = max(80, min(WORLD_SIZE - 80, b.center_x))
-                b.center_y = max(80, min(WORLD_SIZE - 80, b.center_y))
+                b.center_x = max(80, min(self.world_size - 80, b.center_x))
+                b.center_y = max(80, min(self.world_size - 80, b.center_y))
                 if vx or vy:
                     b.heading = math.atan2(vy, vx)
             b.angle = -math.degrees(b.heading) + math.sin(b.wobble) * 3
@@ -2175,8 +2202,8 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
             elif T["b"] <= 0:
                 T["b"] = 9.0
                 behind = tgt.face + math.pi
-                tx = max(100, min(WORLD_SIZE - 100, tgt.pos[0] + math.cos(behind) * 90))
-                ty = max(100, min(WORLD_SIZE - 100, tgt.pos[1] + math.sin(behind) * 90))
+                tx = max(100, min(self.world_size - 100, tgt.pos[0] + math.cos(behind) * 90))
+                ty = max(100, min(self.world_size - 100, tgt.pos[1] + math.sin(behind) * 90))
                 b.state, b.state_t, b.target = "blink", 0.8, (tx, ty)
                 self.hazards.append(Hazard("mist", tx, ty, 60, tele=0.8, owner=b))
         elif kind == "colossus":
@@ -2403,7 +2430,7 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
                     if self.me and not p.restored:     # a returning survivor stays where they were saved
                         self.set_layer(p, self.me.layer, (self.view_pos()[0] + 40, self.view_pos()[1]))
                     p.tp += 1      # tell their game where they are (and on which layer)
-                    c.send({"t": "world", "seed": self.seed, "pid": p.id})
+                    c.send({"t": "world", "seed": self.seed, "pid": p.id, "wg": self.worldgen})   # clients rebuild it
                     self.sent_nodes_ver = self.sent_struct_ver = self.sent_storage_ver = -1
                     self.say(f"{name} joined the game!", 3)
                     self.play("craft", 0.3)
@@ -2569,7 +2596,7 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
                 return
             if t == "world":
                 note = self.menu_note
-                self.setup(int(m["seed"]))
+                self.setup(int(m["seed"]), int(m.get("wg", biomes.LEGACY)))   # an older host: the legacy map
                 self.my_pid = int(m["pid"])
                 self.state = "playing"
                 self.menu_note = note
@@ -2796,7 +2823,10 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
     # ------------------------------------------------------------------ starting
     def start(self, save=None):
         """Start a game: a brand new one, or (with `save`) a saved one picked on the title screen."""
-        self.setup(save["seed"] if save else random.randrange(1 << 30))
+        if save:     # saves from before worldgen versions have no "worldgen": the legacy map, exactly
+            self.setup(save["seed"], int(save.get("worldgen", biomes.LEGACY)))
+        else:
+            self.setup(random.randrange(1 << 30))
         self.away = {}
         self.save_path = None
         if save:
@@ -2823,7 +2853,7 @@ class LastLight(base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d
         else:
             self.intro = intro.Intro(self.my_name, "host")
             self.state = "playing"
-        for _ in range(ANIMAL_CAP // 2):
+        for _ in range(self.animal_cap // 2):
             self.spawn_animal()
 
     def end_intro(self):

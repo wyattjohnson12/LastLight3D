@@ -1,9 +1,11 @@
 """
 world.py - the things that live in the world, and the code that builds the world.
 
-There are two layers: "over" (the surface) and "cave" (underground). Every layer has its own
+The layers are "over" (the surface), "cave" (underground) and any registered by plug-ins (biomes.register_layer
+appends to LAYERS, e.g. "deep"). Every layer has its own
 sprite lists, so zombies, walls and rocks in the cave never touch the surface and vice versa.
-The world is generated from a seed, so every co-op player builds the exact same map.
+The world is generated from a seed, so every co-op player builds the exact same map. Worldgen 1 (old saves)
+is the original 3200 map; worldgen 2 is the big six-biome map. See docs/BIOMES.md.
 """
 import math
 import random
@@ -205,8 +207,167 @@ class Layer:
 
 
 # =========================================================================== generation
-def build_world(seed):
-    """Returns (layers, nodes, links). links = [(surface_pos, cave_pos), ...] for the cave entrances."""
+def build_world(seed, worldgen=1, layout=None):
+    """Returns (layers, nodes, links). links = [(surface_pos, cave_pos), ...] for the cave entrances.
+    worldgen 1 = the original map (old saves); 2+ = the big biome map (needs the biomes.Layout).
+    Extra registered layers (biomes.register_layer) are created empty here; their module fills them.
+    The Mire and every plug-in's content are added afterwards by main.setup() (swamp.py, biomes.generate)."""
+    import biomes
+    if int(worldgen) == biomes.LEGACY:
+        layers, nodes, links = _build_legacy(seed)
+    else:
+        layers, nodes, links = _build_v2(seed, layout or biomes.make_layout(seed, worldgen))
+    for name in LAYERS:
+        if name not in layers:
+            info = biomes.LAYER_INFO.get(name)
+            layers[name] = Layer(name, info.size if info else CAVE_SIZE)
+    return layers, nodes, links
+
+
+def _build_v2(seed, layout):
+    """Worldgen 2: the big map. The shared content (grass, tufts, ponds, cave entrances, trees, rocks, bushes,
+    iron, beehives) spreads over every biome, thinned by each biome's `density`. Every item draws from its own
+    random stream, so one biome's settings only change things near that biome. FROZEN once released:
+    changing anything here needs a new worldgen version (keep this one for its saves)."""
+    import biomes
+    size = layout.size
+    k = biomes.area_scale(2)
+    over = Layer("over", size)
+    cave = Layer("cave", CAVE_SIZE)
+    nodes = []
+    here = lambda p: biomes.get(layout.biome_at(p[0], p[1]))
+
+    # ground tiles: the biome's own texture (or grass), tinted with the biomes around it
+    gs = biomes.seed_int(seed, "ground")
+    grounds = {}
+    for gx in range(0, size + 256, 256):
+        for gy in range(0, size + 256, 256):
+            b = here((gx, gy))
+            tex = None
+            if b.ground is not None:
+                rr = grounds.setdefault(b.name, random.Random(f"{seed}:{b.name}:ground"))
+                tex = b.ground(rr, gx, gy)
+            if tex is None:
+                tex = art.grass(int(biomes._h(gs, gx, gy) * 2.999))
+            s = arcade.Sprite(tex, center_x=gx, center_y=gy)
+            s.color = biomes.blend_tint(layout, gx, gy, 200)
+            over.ground.append(s)
+    rd = random.Random(f"{seed}:decor")
+    decors = {}
+    for _ in range(int(900 * k)):
+        p = (rd.uniform(0, size), rd.uniform(0, size))
+        roll, tuft, v = rd.random(), rd.random() < 0.8, rd.randint(0, 3)
+        b = here(p)
+        if roll >= b.dens("decor"):
+            continue
+        t = None
+        if b.decor is not None:
+            t = b.decor(decors.setdefault(b.name, random.Random(f"{seed}:{b.name}:decor")), p[0], p[1])
+            if t is False:
+                continue
+        if t is None:
+            t = art.tuft(v) if tuft else art.pebbles(v % 3)
+        over.decor.append(arcade.Sprite(t, center_x=p[0], center_y=p[1]))
+
+    centre = layout.centre
+    taken = {}           # 256px grid cell -> [(pos, radius)] (radii are at most 120, so neighbours suffice)
+
+    def take(p, radius):
+        taken.setdefault((int(p[0] // 256), int(p[1] // 256)), []).append((p, radius))
+
+    def clear_of(p, radius):
+        cx, cy = int(p[0] // 256), int(p[1] // 256)
+        for gx in (cx - 1, cx, cx + 1):
+            for gy in (cy - 1, cy, cy + 1):
+                for q, qr in taken.get((gx, gy), ()):
+                    if dist(p, q) <= radius + qr:
+                        return False
+        return True
+
+    def spot(ri, kind, radius, clear=170):
+        for i in range(60):
+            p = (ri.uniform(80, size - 80), ri.uniform(80, size - 80))
+            if ri.random() >= here(p).dens(kind):
+                return None                        # this biome doesn't want one: skip it
+            if dist(p, centre) < clear + radius or biomes.keepout(layout, p[0], p[1]):
+                continue
+            if clear_of(p, radius):
+                take(p, radius)
+                return p
+        return None
+
+    def item_rng(kind, i):
+        return random.Random(f"{seed}:world:{kind}:{i}")
+
+    for i in range(int(POND_COUNT * k)):
+        ri = item_rng("pond", i)
+        if i == 0:   # one pond is always a short walk from spawn
+            a = ri.uniform(0, math.tau)
+            p = (centre[0] + math.cos(a) * 360, centre[1] + math.sin(a) * 300)
+            take(p, 120)
+        else:
+            p = spot(ri, "pond", 120, 380)
+        if p:
+            s = arcade.Sprite(art.pond(i % 3), center_x=p[0], center_y=p[1])
+            over.ponds.append(s)
+            over.solid.append(s)
+
+    surface_links = []
+    for i in range(CAVE_ENTRANCES_V2):
+        p = spot(item_rng("cave", i), "cave", 80, 650)
+        if p:
+            surface_links.append(p)
+            over.exits.append(arcade.Sprite(art_extra.cave_entrance(), center_x=p[0], center_y=p[1]))
+
+    def add_node(layer, n, lst):
+        n.idx = len(nodes)
+        nodes.append(n)
+        lst.append(n)
+        layer.solid.append(n)
+
+    for kind, count, rad in (("tree", TREE_COUNT, 46), ("rock", ROCK_COUNT, 34), ("bush", BUSH_COUNT, 28),
+                             ("iron", IRON_COUNT, 34)):
+        for i in range(int(count * k)):
+            ri = item_rng(kind, i)
+            p = spot(ri, kind, rad, 170 if kind != "iron" else 500)
+            if not p:
+                continue
+            if kind == "tree":
+                v = ri.randint(0, 2)
+                n = Node("tree", art.tree(v), *p)
+                n.variant = v
+                n.angle = n.base_angle = ri.uniform(0, 360)
+                add_node(over, n, over.trees)
+            elif kind == "rock":
+                v = ri.randint(0, 3)
+                n = Node("rock", art.rock(v), *p)
+                n.variant = v
+                add_node(over, n, over.rocks)
+            elif kind == "iron":
+                add_node(over, Node("iron", art_extra.ore("iron"), *p), over.rocks)
+            else:
+                add_node(over, Node("bush", art.bush(True), *p), over.bushes)
+
+    hr = random.Random(f"{seed}:hives")
+    trees = [t for t in over.trees if t.kind == "tree" and here(t.position).dens("hive") > 0]
+    for t in hr.sample(trees, min(int(HIVE_COUNT * k * 0.8), len(trees))):
+        a = hr.uniform(0, math.tau)
+        h = Node("hive", art_bees.hive(True), t.center_x + math.cos(a) * 24, t.center_y + math.sin(a) * 24)
+        h.tree, t.hive = t, h
+        h.idx = len(nodes)
+        nodes.append(h)
+        over.trees.append(h)
+
+    links = _build_cave(random.Random(f"{seed}:cave"), cave, surface_links, add_node)
+    for n in nodes:
+        n.layer = "over" if n.layer != "cave" else "cave"
+    return {"over": over, "cave": cave}, nodes, links
+
+
+def _build_legacy(seed):
+    """Worldgen 1 (saves without a "worldgen" field): the original 3200 map. NEVER change this function -
+    old saves are rebuilt from it and their node numbers must line up exactly.
+    Returns (layers, nodes, links). links = [(surface_pos, cave_pos), ...] for the cave entrances."""
     r = random.Random(seed)
     over = Layer("over", WORLD_SIZE)
     cave = Layer("cave", CAVE_SIZE)
@@ -294,6 +455,14 @@ def build_world(seed):
         over.trees.append(h)
 
     # ---------------------------------------------------------------- the cave
+    links = _build_cave(r, cave, surface_links, add_node)
+    for n in nodes:
+        n.layer = "over" if n.layer != "cave" else "cave"
+    return {"over": over, "cave": cave}, nodes, links
+
+
+def _build_cave(r, cave, surface_links, add_node):
+    """The cave (same for every worldgen so far). Uses the caller's random stream `r`. Returns the links."""
     N = CAVE_SIZE // CAVE_CELL
     wall = [[r.random() < 0.46 or x in (0, N - 1) or y in (0, N - 1) for y in range(N)] for x in range(N)]
     for _ in range(4):   # cellular automata smoothing -> natural looking caverns
@@ -386,6 +555,4 @@ def build_world(seed):
             n = Node(node_kind, art_extra.ore(kind), *p, layer="cave")
             add_node(cave, n, cave.rocks)
             placed += 1
-    for n in nodes:
-        n.layer = "over" if n.layer != "cave" else "cave"
-    return {"over": over, "cave": cave}, nodes, links
+    return links

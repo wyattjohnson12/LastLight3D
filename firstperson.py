@@ -105,7 +105,7 @@ class FirstPerson:
         vw, vh = ui.W, ui.H
         d = (vh / 2) / math.tan(math.radians(FP_FOV_DEG) / 2)
         hy = vh / 2 - d * math.tan(self.fp_pitch)
-        if vl == "cave":
+        if vl != "over":
             arcade.draw_lrbt_rectangle_filled(0, vw, 0, vh, (22, 18, 16))
             return
         hy = max(-10, min(vh + 10, hy))

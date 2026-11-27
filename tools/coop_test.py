@@ -109,12 +109,13 @@ class Client:
         self.sock.settimeout(None)
         self.conn = net.Conn(self.sock)
         self.conn.send({"t": "hello", "name": name})
-        self.pid, self.you, self.tp, self.pos = None, None, 0, (0, 0)
+        self.pid, self.you, self.tp, self.pos, self.wg = None, None, 0, (0, 0), None
 
     def pump(self):
         for m in self.conn.receive():
             if m.get("t") == "world":
                 self.pid = m["pid"]
+                self.wg = m.get("wg")
             elif m.get("t") == "snap" and "you" in m:
                 self.you = m["you"]
                 if self.you["tp"] != self.tp:
@@ -157,6 +158,8 @@ def scenario(tmp):
     a, b = Client("Sam"), Client("Sam")
     check("both clients joined", wait([a, b], 8, lambda: a.pid is not None and b.pid is not None and a.you and b.you),
           f"pids {a.pid} {b.pid}")
+    hw = h.run("result = [g.worldgen, g.world_size]")
+    check("the world message carries the host's worldgen version", a.wg == hw[0] and b.wg == hw[0], f"{a.wg} {hw}")
     keys = h.run("result = sorted(g.rec_key(p) for p in g.players.values())")
     check("same-name players get unique record keys", keys == ["#first", "sam", "sam#2"], str(keys))
 
