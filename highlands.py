@@ -87,8 +87,9 @@ except Exception:      # pragma: no cover - models are optional
 # =========================================================================== 3D shapes (shapes3d.py guide)
 _P = S3.Part
 S3.SHAPES["boulder"] = S3.boulder(height=1.3, lump=0.3, sides=7, foot=(0.92, 0.9), turn=0.2)
-# cliff-ledge chunk: a squat faceted block with a flat, grassy top (the plateau rims)
-S3.SHAPES["hl_ledge"] = S3.Shape([_P([(1.0, 0.0, 0.86, 0.58), (1.05, 0.7, 0.9, 0.74), (0.98, 1.32, 0.86, 0.9),
+# cliff-ledge chunk: a squat faceted block with a flat, grassy top (the plateau rims). It reaches 1 R below its
+# base: on the hills the rim's outer side falls away, and the skirt keeps it from hanging in the air.
+S3.SHAPES["hl_ledge"] = S3.Shape([_P([(1.0, -1.0, 0.4, 0.5), (1.0, 0.0, 0.6, 0.58), (1.05, 0.7, 0.9, 0.74), (0.98, 1.32, 0.86, 0.9),
                                        (0.8, 1.52, 0.68, 1.0), (0.0, 1.6, 0.0, 1.06)], sides=6, jitter=0.18)],
                                  foot=(0.96, 0.96), turn=0.3, cut=0.1)
 # a tall standing stone (a flattened slab) with a band of glowing Titan runes
