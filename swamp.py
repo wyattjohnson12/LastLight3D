@@ -76,6 +76,32 @@ CRAFT_TABS["Supplies"].append(R("swamp_tonic", {"glowcap": 2, "water": 1}, "camp
 RECIPES[:] = [r for tab in CRAFT_TABS.values() for r in tab]   # same list object, crafting indexes in tab order
 
 import art_swamp  # noqa: E402  (after the tables: registers the new art)
+import biomes  # noqa: E402
+
+
+def _mire_sample(game, rng):
+    blobs = getattr(game, "swamp_blobs", None)
+    if not blobs:
+        return None
+    x, y, rad = rng.choice(blobs)
+    a, d = rng.uniform(0, math.tau), math.sqrt(rng.random()) * max(10, rad - 20)
+    return x + math.cos(a) * d, y + math.sin(a) * d
+
+
+def _mire_respawn(game, n, x, y):
+    if n.kind == "tree":
+        return SWAMP_TREE + random.randint(0, 2), 0.0
+    return None
+
+
+# The Mire in the biome registry (biomes.py). Its map content is still built by Swamp.build_swamp() (called by
+# main.setup() right after build_world, before every other plug-in), and its night spawns / mud by the mixin.
+biomes.register(biomes.Biome(
+    "mire", title="The Mire", order=10, legacy=True, tint=(196, 196, 160), fog=(70, 86, 56, 34),
+    node_kinds=("reeds", "glowcap"), sample=_mire_sample, respawn_variant=_mire_respawn,
+    zombie=lambda game, kind, x, y: game.swamp_zombie_kind(kind, x, y, "over"),
+    animals={"rabbit": 2, "deer": 1, "boar": 4, "wolf": 2, "bee": 1},
+))
 
 
 def remap_boss_num(n, saved_order):
@@ -104,22 +130,39 @@ class Swamp:
     def build_swamp(self):
         """Called by setup() right after build_world(). Uses its own random stream from the seed, and only
         ADDS nodes at the end of self.nodes, so every saved game's node numbers stay the same."""
-        r = random.Random(self.seed * 13 + 5)
+        legacy = getattr(self, "worldgen", 1) == 1
+        WORLD_SIZE = self.world_size      # noqa: N806 (3200 on legacy worlds, exactly as before)
         over = self.over
         centre = (WORLD_SIZE / 2, WORLD_SIZE / 2)
-        a = r.uniform(0, math.tau)
-        lim = 640
-        cx = max(lim, min(WORLD_SIZE - lim, centre[0] + math.cos(a) * SWAMP_DIST))
-        cy = max(lim, min(WORLD_SIZE - lim, centre[1] + math.sin(a) * SWAMP_DIST))
-        blobs = [(cx, cy, 310.0)]
-        for _ in range(9):
-            b = r.uniform(0, math.tau)
-            d = r.uniform(140, 360)
-            rad = r.uniform(170, 260)
-            x, y = cx + math.cos(b) * d, cy + math.sin(b) * d
-            if _dist((x, y), centre) - rad < 420 or not (rad < x < WORLD_SIZE - rad and rad < y < WORLD_SIZE - rad):
-                continue
-            blobs.append((x, y, rad))
+        if legacy:      # worldgen 1: NEVER change this branch (old saves are rebuilt from it)
+            r = random.Random(self.seed * 13 + 5)
+            a = r.uniform(0, math.tau)
+            lim = 640
+            cx = max(lim, min(WORLD_SIZE - lim, centre[0] + math.cos(a) * SWAMP_DIST))
+            cy = max(lim, min(WORLD_SIZE - lim, centre[1] + math.sin(a) * SWAMP_DIST))
+            blobs = [(cx, cy, 310.0)]
+            for _ in range(9):
+                b = r.uniform(0, math.tau)
+                d = r.uniform(140, 360)
+                rad = r.uniform(170, 260)
+                x, y = cx + math.cos(b) * d, cy + math.sin(b) * d
+                if _dist((x, y), centre) - rad < 420 or not (rad < x < WORLD_SIZE - rad and rad < y < WORLD_SIZE - rad):
+                    continue
+                blobs.append((x, y, rad))
+            more = 1
+        else:           # worldgen 2: the Mire is a whole region of the layout (biomes.py); bog blobs tile it
+            r = random.Random(f"{self.seed}:mire")
+            cx, cy = self.layout.centres["mire"]
+            blobs = []
+            step = 330
+            for gx in range(step // 2, WORLD_SIZE, step):
+                for gy in range(step // 2, WORLD_SIZE, step):
+                    x, y = gx + r.uniform(-90, 90), gy + r.uniform(-90, 90)
+                    rad = r.uniform(210, 280)
+                    if self.in_swamp((x, y)) and rad * 0.6 < x < WORLD_SIZE - rad * 0.6 and \
+                            rad * 0.6 < y < WORLD_SIZE - rad * 0.6:
+                        blobs.append((x, y, rad))
+            more = 3        # the region is ~4x the old Mire: more pools, plants and trees
         self.swamp_blobs = blobs
         self.swamp_centre = (cx, cy)
         for i, (x, y, rad) in enumerate(blobs):
@@ -134,13 +177,13 @@ class Swamp:
                 b = r.uniform(0, math.tau)
                 d = math.sqrt(r.random()) * max(10, rad - margin)
                 p = (x + math.cos(b) * d, y + math.sin(b) * d)
-                if 80 < p[0] < WORLD_SIZE - 80 and 80 < p[1] < WORLD_SIZE - 80:
+                if 80 < p[0] < WORLD_SIZE - 80 and 80 < p[1] < WORLD_SIZE - 80 and (legacy or self.in_swamp(p)):
                     return p
             return None
 
         keep_clear = [(s.center_x, s.center_y, 150) for s in list(over.ponds) + list(over.exits)]
         self.swamp_pools = []
-        for i in range(12):
+        for i in range(12 * more):
             p = inside(80)
             if p is None or any(_dist(p, (x, y)) < rr for x, y, rr in keep_clear):
                 continue
@@ -149,7 +192,7 @@ class Swamp:
             s = arcade.Sprite(art_swamp.pool(i % 3), center_x=p[0], center_y=p[1])
             over.ground.append(s)
             self.swamp_pools.append((p[0], p[1], 82.0, 52.0))
-        for i in range(140):
+        for i in range(140 * more):
             p = inside()
             if p:
                 over.decor.append(arcade.Sprite(art_swamp.decor(r.randint(0, 3)), center_x=p[0], center_y=p[1]))
@@ -179,8 +222,8 @@ class Swamp:
             return n
 
         placed = 0
-        for _ in range(26 * 5):
-            if placed >= 26:
+        for _ in range(26 * more * 5):
+            if placed >= 26 * more:
                 break
             p = inside(30)
             if p and free(p, 44):
@@ -189,7 +232,7 @@ class Swamp:
                 n = add("tree", art.tree(v), p, over.trees)
                 n.variant = v
         self.swamp_glows = []
-        for kind, count in (("reeds", 46), ("glowcap", 26)):
+        for kind, count in (("reeds", 46 * more), ("glowcap", 26 * more)):
             placed = 0
             for _ in range(count * 5):
                 if placed >= count:
@@ -200,7 +243,7 @@ class Swamp:
                     p = (x + math.cos(b) * (rx + 18), y + math.sin(b) * (ry + 16))
                 else:
                     p = inside(20)
-                if not p or not free(p, 16):
+                if not p or not free(p, 16) or not (legacy or self.in_swamp(p)):
                     continue
                 placed += 1
                 if kind == "reeds":
@@ -215,6 +258,8 @@ class Swamp:
 
     # ------------------------------------------------------------------ where is the swamp?
     def in_swamp(self, pos):
+        if getattr(self, "worldgen", 1) != 1:       # the big map: the Mire region of the layout
+            return self.layout.biome_at(pos[0], pos[1]) == "mire"
         x, y = pos
         for bx, by, rad in getattr(self, "swamp_blobs", ()):
             if (x - bx) ** 2 + (y - by) ** 2 < rad * rad:
@@ -330,7 +375,8 @@ class Swamp:
         if b.target is None:
             p = min(alive, key=lambda q: _dist(q.pos, b.position)) if alive else None
             spot = p.pos if p else b.position
-            b.target = (max(100, min(WORLD_SIZE - 100, spot[0])), max(100, min(WORLD_SIZE - 100, spot[1])))
+            S = self.world_size
+            b.target = (max(100, min(S - 100, spot[0])), max(100, min(S - 100, spot[1])))
             b.alpha = 0
             self.hazards.append(Hazard("erupt", b.target[0], b.target[1], 92, tele=1.3, dmg=b.damage * 0.9, owner=b))
         if t >= 2.1:

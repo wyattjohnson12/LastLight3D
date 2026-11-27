@@ -7,7 +7,8 @@ Every game you start gets its own save file in the saves/ folder. The game saves
   * and whenever you press S (or X on a controller) on the pause screen.
 Only the person running the world (solo player or co-op host) saves - joiners are saved by the host.
 
-What's in a save: the world seed (the map is rebuilt from it), what's been chopped/mined/built,
+What's in a save: the world seed + "worldgen" version (the map is rebuilt from them - saves without
+"worldgen" are the legacy map, see docs/BIOMES.md) + "spans" (which nodes each biome module made), what's been chopped/mined/built,
 team storage, the time and day, the day/night lengths, zombies, bosses, pets, and every survivor.
 
 Survivors are remembered by name. When a co-op friend joins a resumed game with the same name, they
@@ -22,6 +23,7 @@ import time
 import arcade
 
 from settings import *
+import biomes
 import swamp
 from world import LAYERS, Animal, Boss, Zombie
 
@@ -205,7 +207,8 @@ class SaveGame:
             "version": SAVE_VERSION,
             "meta": {"saved_at": time.time(), "day": self.day, "mode": mode, "names": names,
                      "difficulty": list(self.difficulty)},
-            "seed": self.seed, "clock": self.clock, "day": self.day, "kills": self.kills,
+            "seed": self.seed, "worldgen": self.worldgen, "spans": dict(self.node_spans),   # biomes.py
+            "clock": self.clock, "day": self.day, "kills": self.kills,
             "time_alive": self.time_alive, "cold_mult": self.cold_mult, "weather": self.weather_save(),
             "boss": [self.boss_num, self.boss_day, self.boss_hp],
             "boss_order": list(BOSS_ORDER),     # so a save outlives changes to the boss rotation
@@ -240,6 +243,14 @@ class SaveGame:
         d = list(data["meta"].get("difficulty") or default)
         gap = d[3] if len(d) > 3 else BOSS_EVERY          # older saves didn't have this setting
         self.difficulty = (d[0], int(d[1]), int(d[2]), int(gap))
+        remap = biomes.remap_index(data.get("spans"), self.node_spans)   # a module's node count changed
+        data = dict(data)
+        if data.get("spans") and data["spans"] != self.node_spans:
+            base_data = dict(data.get("base") or {})
+            base_data["moved"] = [[remap(r[0])] + list(r[1:]) for r in base_data.get("moved", []) if remap(r[0]) is not None]
+            data["base"] = base_data
+            data["nodes"] = [[remap(r[0])] + list(r[1:]) for r in data.get("nodes", []) if remap(r[0]) is not None]
+            data["regrow"] = [[t, remap(i)] for t, i in data.get("regrow", []) if remap(i) is not None]
         self.base_load(data.get("base"))      # base.py (older saves: nothing moved yet)
         for idx, code, timer, hp in data.get("nodes", []):
             if 0 <= idx < len(self.nodes) and code in CODE_NODE:

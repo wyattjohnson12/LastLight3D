@@ -243,6 +243,9 @@ class Weather:
             return
         r, g, b, a = SEASON_TINT[self.season]
         arcade.draw_lrbt_rectangle_filled(0, W, 0, H, (r, g, b, a))
+        fog = self.biome_fog() if hasattr(self, "layout") else None   # biomes.py: the biome's haze (blended)
+        if fog:
+            arcade.draw_lrbt_rectangle_filled(0, W, 0, H, fog[:3] + (int(fog[3] * (1 - 0.5 * self.darkness)),))
         k = self.weather_k
         kind = self.weather_shown
         if k <= 0.01:

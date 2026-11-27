@@ -99,6 +99,14 @@ Every boss drops a material for its own gear, and each boss's gear beats the one
 | Mire Lurker | **Thornroot Whip** - 13 damage, long reach, slows | **Mire Mask** (head) armor 4, filters spore gas |
 | Inferno Colossus | **Ember Blade** - 13 damage, quick, sets enemies on fire | - |
 
+## The world and its biomes
+
+New games are played on a much bigger map. You start in **the Forest** in the middle, and around it, in a
+different arrangement on every map, lie the **Frostwood Tundra**, the **Stone Highlands**, the **Ashlands**,
+**the Mire** and the **Riverlands**. Saved games from before the big map keep their original map exactly.
+For modders and contributors: `docs/BIOMES.md` explains how biomes, terrain and extra underground layers
+plug in (`biomes.py`).
+
 ## The Mire (swamp biome)
 
 Somewhere out past the meadows (a different spot on every map) lies **the Mire**: dark bog ground,
