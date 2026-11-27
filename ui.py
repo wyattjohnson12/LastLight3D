@@ -852,7 +852,14 @@ class UI:
             name, day, night, gap = self.chosen_difficulty()
             return ["Play solo", "Host co-op game", "Join co-op game", "Local co-op (split screen)",
                     "Load saved game", f"Difficulty:  {name}  ({day}s / {night}s,  boss every {gap} nights)",
-                    f"Fullscreen:  {'On' if self.fullscreen else 'Off'}   (F11)", "Quit"]
+                    "Screen & graphics...", "Quit"]
+        if self.menu == "gfx":
+            onoff = lambda v: "On" if v else "Off"
+            smooth = self.smooth_wanted()
+            later = "   (after a restart)" if smooth != getattr(self, "smooth_at_start", smooth) else ""
+            return [f"Fullscreen:  {onoff(self.fullscreen)}   (F11)",
+                    f"Smooth edges:  {onoff(smooth)}{later}",
+                    f"Glow effects:  {onoff(self.post_wanted())}", "Back"]
         if self.menu == "local":
             return []
         if self.menu == "diff":
@@ -897,7 +904,7 @@ class UI:
             self.menu, self.menu_sel = self.confirm_from
             self.menu_note = savegame.save_label(self.picked_save[1]) if self.menu == "save" else ""
             return
-        back = {"diff": ("main", 5), "load": ("main", 4), "save": ("load", 0)}
+        back = {"diff": ("main", 5), "load": ("main", 4), "save": ("load", 0), "gfx": ("main", 6)}
         self.menu, self.menu_sel = back.get(self.menu, ("main", 0))
         self.menu_note = ""
 
@@ -956,9 +963,18 @@ class UI:
                 self.menu, self.menu_note = "diff", ""
                 self.menu_sel = names.index(cur) if cur in names else len(names)
             elif i == 6:
-                self.toggle_fullscreen()
+                self.menu, self.menu_sel, self.menu_note = "gfx", 0, ""
             else:
                 arcade.exit()
+        elif self.menu == "gfx":        # post3d.py: smooth edges (MSAA) and glow (bloom)
+            if i == 0:
+                self.toggle_fullscreen()
+            elif i == 1:
+                self.toggle_smooth()
+            elif i == 2:
+                self.toggle_glow()
+            else:
+                self.menu_back()
         elif self.menu == "diff":
             n = len(DIFFICULTIES)
             if i < n:
@@ -1057,7 +1073,7 @@ class UI:
             return
         heads = {"diff": "DIFFICULTY  -  day & night length, and how often bosses come",
                  "load": "LOAD A SAVED GAME", "save": "RESUME THIS GAME AS...",
-                 "confirm": "DELETE THIS SAVE?"}
+                 "confirm": "DELETE THIS SAVE?", "gfx": "SCREEN & GRAPHICS"}
         if self.menu == "confirm":
             self.txt("conf0", "DELETE THIS SAVE?", W / 2, 440, (255, 140, 120), 24, anchor_x="center", bold=True)
             self.txt("conf1", self.menu_note, W / 2, 400, (255, 255, 255), 15, anchor_x="center", bold=True)
@@ -1096,6 +1112,10 @@ class UI:
         elif self.menu == "save":
             self.txt("t6", "Games save every morning, when you leave, and with S on the pause screen.   ESC = back",
                      W / 2, 46, (160, 160, 160), 11, anchor_x="center")
+        elif self.menu == "gfx":
+            self.txt("t6", "Smooth edges: no jagged edges (restart to change).   Glow: fires, crystals and eyes "
+                     "shine at night.   Turn off if the game is slow.", W / 2, 46,
+                     (160, 160, 160), 11, anchor_x="center")
         elif self.menu == "confirm":
             self.txt("t6", "ESC / B = keep it", W / 2, 46, (160, 160, 160), 11, anchor_x="center")
         else:

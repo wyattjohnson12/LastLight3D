@@ -610,6 +610,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
     def draw_world_3d(self, L, vl):
         self._init3d()
         ctx = self.ctx
+        self.post_begin(vl)          # post3d.py: glow effects - draw the world offscreen (no-op when off)
         view = self.view_pos()
         self._trees(L, view)
         cave_geo = self._cave_walls(L) if vl != "over" else None   # any underground layer
@@ -758,6 +759,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
                 g.alpha = int(130 * dk) + 20
             blend = (ctx.SRC_ALPHA, ctx.ONE)
             self.flat(L.glows, blend=blend)
+            self.post_glow()         # post3d.py: what's drawn from here on blooms (not the wide haze above)
             ctx.enable(ctx.DEPTH_TEST)
             self.stand(L.flames, lift=2, nudge=2, cut=0.05)
             self.draw_kind_glows(L.bushes)        # glowcaps, glowing crystals, lantern glass...
@@ -783,11 +785,13 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
             if vl != "over":
                 for s in L.exits:
                     arcade.draw_circle_filled(s.center_x, s.center_y, 60, (255, 240, 200, 40))
+        self.post_glow()             # post3d.py: (by day) the embers and sparks below bloom
         self.use_world3d()           # embers, sparks and flames glow on top of the night
         ctx.enable(ctx.DEPTH_TEST)
         self.fx_draw_particles(vl, additive=True)
         ctx.disable(ctx.DEPTH_TEST)
         self.gui.use()
+        self.post_end(dk)            # post3d.py: bloom + colour grade onto the screen (HUD etc. come after)
 
         self.draw_weather_3d(vl)  # weather.py: rain / snow / fog and the season's tint
         self.draw_repair_bars(L)  # repair.py: holding the hammer shows how hurt buildings are
