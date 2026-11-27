@@ -224,3 +224,8 @@ blue night - edit the `_GRADE` table), the light pools from your torch, friends,
 and fire pots, the sun direction for the soft shadows (long in the morning and evening, short at noon),
 and the particles (embers and smoke from fires, sparks and blood on hits, chips and dust when chopping
 and mining). Particles come from a fixed pool of `MAX_PARTS` slots, so they never slow the game down.
+
+## Making creature models
+
+Creatures are low-poly models built with Blender scripts in `tools/blender/` and saved in
+`assets/models/` (you don't need Blender to play). See [docs/MODELS.md](docs/MODELS.md).
