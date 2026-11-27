@@ -21,6 +21,7 @@ from arcade.gl import BufferDescription
 from arcade.gl.geometry import quad_2d_fs
 from pyglet import gl
 
+import terrain3d
 from settings import *
 
 MAX_PARTS = 640           # particle pool size (oldest are recycled when it's full)
@@ -168,7 +169,8 @@ class FX3D:
         if getattr(self, "_fx_progs", None):
             return
         ctx = self.ctx
-        pts = ctx.program(vertex_shader=POINT_VS, geometry_shader=POINT_GS, fragment_shader=POINT_FS)
+        pts = ctx.program(vertex_shader=POINT_VS, geometry_shader=terrain3d.inject(POINT_GS, "0.0"),  # on the hills
+                          fragment_shader=POINT_FS)
         pts["ground"] = 0
         pts["hot"] = 0.0
         comp = ctx.program(vertex_shader=COMP_VS, fragment_shader=COMP_FS)

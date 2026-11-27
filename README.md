@@ -107,6 +107,24 @@ different arrangement on every map, lie the **Frostwood Tundra**, the **Stone Hi
 For modders and contributors: `docs/BIOMES.md` explains how biomes, terrain and extra underground layers
 plug in (`biomes.py`).
 
+## Hills
+
+The big map isn't flat any more: the ground rolls in gentle hills through the Forest and the Riverlands,
+gets bumpier in the Tundra and the Ashlands, and climbs highest in the Stone Highlands. The Mire, the area
+around the spawn, ponds, cave entrances and rivers stay flat (water always lies in the valleys).
+
+* Walking **uphill is slower** (down to 60% on the steepest slopes) and walking downhill a little faster.
+* **Arrow Turrets on high ground see farther** - up to 170 extra range against things below them. While you
+  place one, a second, fainter ring shows how far it reaches downhill.
+* Everything stands on the ground where it is: survivors, creatures, trees, rocks, buildings, walls, shadows,
+  fire light, particles. In first person your eyes rise and fall with the ground.
+* Saved games from before the big map stay perfectly flat, and so do the caves.
+
+How it works (for contributors): `hills.py` makes the heights (seeded noise on a 64 px grid, cached per world,
+summed with any other module's `height` hook by `game.ground_height`); `terrain3d.py` puts them on the GPU as a
+small texture that every 3D shader reads, turns the ground tiles into a shaded heightfield, and lifts every
+sprite, shape, creature model, particle and light by the ground under it.
+
 ## The Mire (swamp biome)
 
 Somewhere out past the meadows (a different spot on every map) lies **the Mire**: dark bog ground,
@@ -214,13 +232,25 @@ The camera lives in `settings.py`: `CAM_PITCH_DEG` (how steeply it looks down; 9
 `CAM_FOV_DEG` (field of view), and `CAVE_WALL_HEIGHT` / `BUILD_WALL_HEIGHT`. All the 3D drawing is in
 `view3d.py`; the game logic, co-op and networking are the same as the 2D version.
 
-Trees, rocks, ores, bushes, campfires, braziers, benches, storage bins, turret pedestals and huts are small
-low-poly 3D shapes with their painted picture draped over them (and in first person, animals, zombies,
-bosses and other survivors get simple 3D bodies). Each shape is a short list of rings in the `SHAPES`
-table in `shapes3d.py` - change a number there to make trees taller or rocks lumpier.
+Trees (leafy oaks, swamp willows, dead trees), beehives, rocks, ores, bushes, reeds, glowcaps, campfires,
+braziers, furnaces, lanterns, gates, benches, storage bins, turret pedestals and huts are small low-poly 3D
+shapes built on the GPU, with their painted picture draped over them or plain colours picked from it
+(in first person, animals, zombies, bosses and other survivors get simple 3D bodies). They're all in the
+`SHAPES` table in `shapes3d.py` - change a number there to make trees taller or rocks lumpier.
+
+**Adding a 3D object for a new biome:** read the guide at the top of `shapes3d.py`. In short: give the sprite
+a `.kind`, put it in `L.trees` / `L.rocks` / `L.bushes` / `L.builds`, and register a shape with one of the
+builders, e.g. `SHAPES["pine"] = conifer(tiers=4)`, `SHAPES["ice"] = crystal_cluster(glow=0.5)`,
+`SHAPES["river_reeds"] = blade_clump(n=14)`. Creatures and detailed organic props come from Blender models
+(`models3d.py`, see `docs/MODELS.md`); terrain props stay in `SHAPES`.
 
 Lighting and effects live in `fx3d.py`: the time-of-day colour grading (warm dawn, golden/purple dusk,
 blue night - edit the `_GRADE` table), the light pools from your torch, friends, campfires, braziers
 and fire pots, the sun direction for the soft shadows (long in the morning and evening, short at noon),
 and the particles (embers and smoke from fires, sparks and blood on hits, chips and dust when chopping
 and mining). Particles come from a fixed pool of `MAX_PARTS` slots, so they never slow the game down.
+
+## Making creature models
+
+Creatures are low-poly models built with Blender scripts in `tools/blender/` and saved in
+`assets/models/` (you don't need Blender to play). See [docs/MODELS.md](docs/MODELS.md).

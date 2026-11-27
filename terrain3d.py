@@ -58,6 +58,17 @@ def inject(src, foot=None):
     return src
 
 
+MODEL_LINE = "w.z *= up_k;"
+
+
+def inject_models(src):
+    """models3d.py's instanced creature vertex shader: stand each instance on the ground under it."""
+    src = inject(src)
+    if MODEL_LINE not in src:
+        print("terrain3d: models3d's vertex shader changed - creature models won't follow the hills")
+    return src.replace(MODEL_LINE, "w.z = w.z * up_k + ground_z(i_a.xy);")
+
+
 # The ground tiles as a heightfield (sprite list geometry shader: one point per tile in).
 GROUND_GEO = """
 #version 330
@@ -94,16 +105,14 @@ void main() {
     float a = radians(v_angle[0]);
     mat2 rot = mat2(cos(a), -sin(a), sin(a), cos(a));
     vec3 L = normalize(vec3(-sun.x, -sun.y, 1.4));
-    float e = 1.0 / hill_map.y;     // one grid cell
     for (int r = 0; r < Q; r++) {
         for (int i = 0; i <= Q; i++) {
             for (int k = 1; k >= 0; k--) {
                 vec2 st = vec2(float(i), float(r + k)) / float(Q);
                 vec2 p = c.xy + rot * ((st * 2.0 - 1.0) * hs);
-                float z = ground_z(p);
-                float gx = ground_z(p + vec2(e, 0.0)) - ground_z(p - vec2(e, 0.0));
-                float gy = ground_z(p + vec2(0.0, e)) - ground_z(p - vec2(0.0, e));
-                vec3 n = normalize(vec3(-gx, -gy, 2.0 * e));
+                vec3 hg = textureLod(hill_tex, ((p - vec2(hill_map.x)) * hill_map.y + 0.5) * hill_map.z, 0.0).rgb;
+                float z = hg.r;
+                vec3 n = normalize(vec3(-hg.g, -hg.b, 1.0));     // slope baked into the texture
                 float shade = clamp(1.0 + 1.15 * (dot(n, L) - L.z), 0.55, 1.2);
                 gs_color = vec4(v_color[0].rgb * shade, v_color[0].a);
                 gs_uv = mix(mix(uv2, uv3, st.x), mix(uv0, uv1, st.x), st.y);
@@ -115,6 +124,21 @@ void main() {
     }
 }
 """
+
+
+def _height_slope(g):
+    """(height, dh/dx, dh/dy) per grid point - the ground shader's normals need one fetch, not five."""
+    n, v = g.n, g.v
+    out = array("f", bytes(12 * n * n))
+    for j in range(n):
+        for i in range(n):
+            k = j * n + i
+            i0, i1 = max(0, i - 1), min(n - 1, i + 1)
+            j0, j1 = max(0, j - 1), min(n - 1, j + 1)
+            out[3 * k] = v[k]
+            out[3 * k + 1] = (v[j * n + i1] - v[j * n + i0]) / ((i1 - i0) * hills.CELL)
+            out[3 * k + 2] = (v[j1 * n + i] - v[j0 * n + i]) / ((j1 - j0) * hills.CELL)
+    return out
 
 
 class Terrain3D:
@@ -133,6 +157,28 @@ class Terrain3D:
         self._hill_tex = None
         self._hill_grid = None
 
+    def _m3_init(self):
+        """models3d.CreatureModels._m3_init with its vertex shader lifted onto the hills (no edit to models3d.py:
+        it reads the module's VS when it builds the program)."""
+        if getattr(self, "_m3_prog", None):
+            return
+        import models3d
+        vs = models3d.VS
+        models3d.VS = inject_models(vs)
+        try:
+            super()._m3_init()
+        finally:
+            models3d.VS = vs
+        self.hill_apply(self._m3_prog)
+
+    def _hill_programs(self):
+        progs = [self._hill_prog] + list(self._progs3d[:2]) + list(getattr(self, "_mesh_progs", {}).values())
+        for name in ("_m3_prog", "_fx_progs"):
+            p = getattr(self, name, None)
+            if p is not None:
+                progs.append(p[0] if isinstance(p, tuple) else p)
+        return progs
+
     def hill_grid(self, layer=None):
         """The total height grid for drawing `layer` (default: the layer being viewed), or None if it's flat."""
         if (layer or getattr(self, "view_layer", "over")) != "over":
@@ -144,16 +190,18 @@ class Terrain3D:
         g = self.hill_grid(layer)
         return g.at(x, y) if g is not None else 0.0
 
-    def hill_bind(self, vl, progs):
-        """Before drawing layer `vl`: bind the height texture (unit 2) and switch the lookup on/off in `progs`.
-        Returns True if the ground has hills."""
+    def hill_bind(self, vl, progs=None):
+        """Before drawing layer `vl`: bind the height texture (unit 2) and switch the lookup on/off in every
+        world shader. Returns True if the ground has hills."""
+        if progs is None:
+            progs = self._hill_programs()
         g = self.hill_grid(vl)
         if g is not None and self._hill_key is not g:
             self._hill_key = g
             ctx = self.ctx
             if self._hill_tex is not None:
                 self._hill_tex.delete()
-            self._hill_tex = ctx.texture((g.n, g.n), components=1, dtype="f4", data=array("f", g.v),
+            self._hill_tex = ctx.texture((g.n, g.n), components=3, dtype="f4", data=_height_slope(g),
                                          filter=(ctx.LINEAR, ctx.LINEAR), wrap_x=ctx.CLAMP_TO_EDGE,
                                          wrap_y=ctx.CLAMP_TO_EDGE)
             self._hill_grid = g
@@ -161,16 +209,22 @@ class Terrain3D:
         if on:
             self._hill_tex.use(2)
         m = (hills.ORIGIN, 1.0 / hills.CELL, 1.0 / g.n) if on else (0.0, 1.0, 1.0)
+        self._hill_uni = (int(on), m)
         for p in progs:
-            try:
-                p["hill_tex"] = 2
-                p["hill_on"] = int(on)
-                p["hill_map"] = m
-            except KeyError:
-                pass
+            self.hill_apply(p)
         if on:
             self._hill_prog["hill_max"] = float(g.hmax)
         return on
+
+    def hill_apply(self, p):
+        """Give one program the current hill settings (for programs made in the middle of a frame)."""
+        on, m = getattr(self, "_hill_uni", (0, (0.0, 1.0, 1.0)))
+        try:
+            p["hill_tex"] = 2
+            p["hill_on"] = on
+            p["hill_map"] = m
+        except KeyError:
+            pass
 
     def draw_hill_ground(self, lst, sun):
         """The ground tiles of the surface as the heightfield (depth test on: hills hide what's behind)."""
