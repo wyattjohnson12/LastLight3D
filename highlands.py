@@ -615,7 +615,9 @@ def ambient(game, dt, x, y):
                 game._burst(h.x - h.vx * 0.08, h.y - h.vy * 0.08, (150, 140, 122), 2, 50, 5, 0.7, "over")
 
 
-def draw3d(game, L, vl):
+def draw3d(game, L, vl, stage="props"):
+    if stage != "props":
+        return
     if vl != "over":
         return
     st = _state(game)

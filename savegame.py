@@ -216,6 +216,7 @@ class SaveGame:
                       if n.state != "full" or n.hp != NODES[n.kind]["hp"]],
             "regrow": [[round(t, 1), n.idx] for t, n in self.regrow],
             "base": self.base_save(),         # base.py: nodes that grew back elsewhere, cleared spots
+            "biomes": self.biome_save(),      # biomes.py: each plug-in's own state (terrain.py: worn ground)
             "structs": [[s.kind, s.center_x, s.center_y, s.layer, round(s.hp, 1), int(s.lit), round(s.out_t, 1)]
                         for s in self.structs.values()],
             "storage": self.storage,
@@ -297,3 +298,4 @@ class SaveGame:
             self.over.animals.append(a)
             self.amap[a.aid] = a
         self.away = dict(data.get("players", {}))
+        self.biome_load(data.get("biomes"))   # biomes.py (older saves: None)

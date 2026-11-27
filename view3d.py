@@ -641,6 +641,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
         else:
             self.flat(L.ground)
         self.flat(L.decor)
+        self.biome_draw3d(L, vl, "ground")     # biomes.py: rivers, roads, worn ground (terrain.py)
         self.flat(L.ponds)
         if vl == "over":
             self.flat(L.exits)
@@ -683,6 +684,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels):
             self.flat(L.builds, BUILD_WALL_HEIGHT, boxes=True)
         if vl != "over":
             self.stand(L.exits)
+        self.biome_draw3d(L, vl, "solid")      # biomes.py: cliffs, bridges, crops, fish (terrain.py)
         self.draw_kinds(L.bushes)
         self.draw_kinds(L.rocks)
         self.draw_kinds(L.builds, getattr(self, "struct_ver", 0), MESH_BUILDS)

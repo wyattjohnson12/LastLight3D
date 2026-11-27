@@ -91,13 +91,27 @@ class Biome:
       blocked(game, x, y, layer)    -> True if nobody can walk there (cliff faces, deep water)
       water(game, x, y, layer)      -> True if that's water you could drink / swim in
       speed_at(game, p, dx, dy)     -> multiplier for walking from p.pos in direction (dx, dy) (hills)
+      detour(game, s, mvx, mvy)     -> (dx, dy) or None: a zombie / animal walking (mvx, mvy) was stopped by
+                                    blocked(); which way should it head instead (e.g. to the nearest ford)?
+    Gameplay (host / solo):
+      swing(game, p, item, w)       -> True if this module used up the survivor's swing (fishing, hoeing...)
+      use(game, p, item)            -> True if this module handled using a non-food item (planting seeds...)
+      build_ok(game, item, x, y, layer) -> False to forbid building `item` there (True / None = no opinion)
+    Saving & co-op:
+      save(game)                    -> JSON data kept in the save under "biomes"[name]
+      load(game, data)              after a save is loaded (data is None for saves without it)
+      event(game, ev)               a client got ["bio", name, ...] (send with game.biome_emit(name, [...]))
+    Drawing (every computer):
+      draw3d(game, L, vl, stage)    extra 3D drawing. stage "ground": after the flat ground + decor (no depth
+                                    test); "solid": with the standing things (depth tested)
     Other:
       order                         generation order (lower first). FIXED - never renumber a released one.
       legacy                        also runs on worldgen 1 worlds (only ever ADD nodes then)
     """
 
     HOOKS = ("gen_surface", "gen_layers", "ground", "decor", "keepout", "respawn_variant", "sample", "zombie", "update",
-             "player_tick", "speed", "ambient", "visuals", "height", "blocked", "water", "speed_at", "draw3d")
+             "player_tick", "speed", "ambient", "visuals", "height", "blocked", "water", "speed_at", "detour",
+             "swing", "use", "build_ok", "save", "load", "event", "draw3d")
 
     def __init__(self, name, title="", order=100, region=True, legacy=False, tint=(255, 255, 255), density=None,
                  node_kinds=(), forbid=(), animals=None, fog=None, **hooks):
@@ -464,6 +478,72 @@ class BiomeWorld:
     def terrain_water(self, x, y, layer="over"):
         return any(b.water(self, x, y, layer) for b in with_hook("water"))
 
+    def water_near(self, pos, radius=110, layer="over"):
+        """Is there terrain water (rivers, lakes) within about `radius` of pos?"""
+        if not with_hook("water"):
+            return False
+        x, y = pos
+        if self.terrain_water(x, y, layer):
+            return True
+        for k in range(12):
+            a = k * math.tau / 12
+            for r in (radius * 0.5, radius):
+                if self.terrain_water(x + math.cos(a) * r, y + math.sin(a) * r, layer):
+                    return True
+        return False
+
+    def body_blocked(self, s, x, y):
+        """Zombies / animals (main.step_body): may sprite s NOT stand at (x, y)? Swimmers (ANIMALS "swims")
+        only mind the dry obstacles (cliffs), not water."""
+        layer = getattr(s, "layer", "over")
+        if not self.terrain_blocked(x, y, layer):
+            return False
+        info = getattr(s, "info", None)
+        wades = hasattr(s, "bid") or (info and info.get("swims"))        # bosses wade through rivers
+        return not (wades and self.terrain_water(x, y, layer))
+
+    def body_detour(self, s, mvx, mvy):
+        """A body was stopped by the terrain: (dx, dy) to head along instead, or None."""
+        for b in with_hook("detour"):
+            d = b.detour(self, s, mvx, mvy)
+            if d:
+                return d
+        return None
+
+    # --- gameplay hooks (host / solo)
+    def biome_swing(self, p, item, w):
+        return any(b.swing(self, p, item, w) for b in with_hook("swing"))
+
+    def biome_use(self, p, item):
+        return any(b.use(self, p, item) for b in with_hook("use"))
+
+    def biome_build_ok(self, item, x, y, layer):
+        return all(b.build_ok(self, item, x, y, layer) is not False for b in with_hook("build_ok"))
+
+    # --- saves, co-op events, drawing
+    def biome_save(self):
+        return {b.name: b.save(self) for b in with_hook("save")}
+
+    def biome_load(self, data):
+        data = data or {}
+        for b in with_hook("load"):
+            b.load(self, data.get(b.name))
+
+    def biome_emit(self, name, payload, to=None):
+        """Host: send ["bio", name, *payload] to the clients (to=None: everyone). Returns True if this
+        computer should apply it too (like game._emit)."""
+        return self._emit(["bio", name] + list(payload), to)
+
+    def biome_event(self, ev):
+        if len(ev) > 1 and ev[1] in BIOMES and BIOMES[ev[1]].event is not None:
+            BIOMES[ev[1]].event(self, ev)
+
+    def biome_draw3d(self, L, vl, stage="props"):
+        """Every computer, inside view3d.draw_world_3d. stage: "ground" (rivers, roads), "solid" (cliffs,
+        bridges, crops) or "props" (after the trees: highland ledges, rolling boulders...)."""
+        for b in with_hook("draw3d"):
+            b.draw3d(self, L, vl, stage)
+
     # --- survivors
     def biome_speed(self, p):
         """Walking speed multiplier from the biome under p and the terrain (runs where p is moved)."""
@@ -507,11 +587,6 @@ class BiomeWorld:
         b = get(self.biome_at((x, y)))
         if b.ambient is not None:
             b.ambient(self, dt, x, y)
-
-    def biome_draw3d(self, L, vl):
-        """Every computer, inside view3d.draw_world_3d: plug-ins draw their own 3D props (non-node sprites)."""
-        for b in with_hook("draw3d"):
-            b.draw3d(self, L, vl)
 
     def biome_fog(self):
         """(r, g, b, a) haze for where the viewer stands, blended over the borders; None = none."""
