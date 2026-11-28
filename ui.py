@@ -877,7 +877,7 @@ class UI:
                     f"Smooth edges:  {onoff(smooth)}{later}",
                     f"Glow effects:  {onoff(self.post_wanted())}",
                     f"Sun shadows:  {self.shadows_mode().capitalize()}",
-                    f"3D grass:  {self.grass_mode().capitalize()}", "Back"]
+                    f"3D grass & ground detail:  {self.grass_mode().capitalize()}", "Back"]
         if self.menu == "local":
             return []
         if self.menu == "diff":

@@ -18,7 +18,7 @@ How it stays cheap:
     pools of fires at night and the sun's shadows light them exactly like the ground under them.
 
 Option "grass" in lastlight_config.json (Screen & graphics): "high" (default), "low" (a smaller, thinner
-field) or "off".
+field) or "off" (no grass, and the ground shader skips its finest detail too - ground3d.py g_detail).
 """
 import math
 import time
@@ -99,9 +99,9 @@ void main() {
 
     // ---- size and colour (matching the ground's big lush / dry patches)
     float n1 = gfbm(root / 520.0 + 3.0);
-    float reed = smoothstep(0.6, 0.9, water) * (1.0 - high);
+    float reed = smoothstep(0.7, 0.95, water) * (1.0 - high) * smoothstep(0.3, 0.55, gnoise(root / 70.0));
     float tall = (forest * 1.0 + meadow * 1.3 + mire * 1.45 + high * 0.75) / green;
-    tall *= 1.0 + 1.4 * reed;
+    tall *= 1.0 + 1.0 * reed;
     float H = (8.0 + 10.0 * gh(w + 3.3)) * tall * (0.75 + 0.25 * min(amount, 1.0)) * (1.0 - 0.35 * g_winter)
             * (0.5 + 0.5 * fade);
     vec3 c = (forest * vec3(0.27, 0.45, 0.16) + meadow * vec3(0.43, 0.6, 0.22) + mire * vec3(0.31, 0.38, 0.16)

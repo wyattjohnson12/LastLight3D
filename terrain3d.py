@@ -242,6 +242,7 @@ class Terrain3D:
             gm.bind()
         ground3d.apply(p, gm, vl == "over")
         p["g_under"] = int(vl != "over")
+        p["g_detail"] = int(self.grass_mode() != "off")     # grass3d.py's option: Off = the cheap ground too
         autumn, winter = ground3d.season_k(self)
         p["g_autumn"] = autumn
         p["g_winter"] = winter

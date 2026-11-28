@@ -100,7 +100,7 @@ GROUND_FS = """
 uniform sampler2D sprite_texture;
 uniform vec4 spritelist_color;
 uniform int g_under;        // 1 = underground: a rock floor
-uniform int g_detail;       // 0 = cheap (far / slow machines), 1 = everything
+uniform int g_detail;       // 0 = cheap (slow machines: the grass option is Off), 1 = everything
 uniform float g_time;
 uniform float g_autumn;     // 0..1 how autumnal (more fallen leaves, drier grass)
 uniform float g_winter;     // 0..1
@@ -185,10 +185,10 @@ void main() {
         s.gloss = smoothstep(0.6, 0.75, n1) * 0.35;
         s.alb *= 1.0 - 0.5 * crack;
         if (fine > 0.0) {
-            vec4 g = speck(q, 11.0, 0.5, 2.2, 1.3);
-            vec3 pc = vec3(0.5, 0.47, 0.45) * (0.75 + 0.5 * g.y);
+            vec4 g = speck(q, 13.0, 0.3, 2.4, 1.3);
+            vec3 pc = s.alb * (1.05 + 0.4 * g.y);         // grit: a shade lighter than the rock around it
             float lit = 0.85 + 0.35 * clamp(-dot(g.zw, lt_sun.xy), -1.0, 1.0);
-            s.alb = mix(s.alb, pc * lit, g.x * fine);
+            s.alb = mix(s.alb, pc * lit, g.x * fine * 0.8);
             vec4 m = speck(q + 5.0, 23.0, 0.05, 1.2, 1.0);
             s.glow += vec3(0.5, 0.75, 0.9) * m.x * fine * (0.5 + 0.5 * sin(g_time * 2.0 + m.y * 40.0)) * 0.35;
         }
@@ -231,7 +231,7 @@ void main() {
     float rock = smoothstep(0.11, 0.2, slope + 0.07 * (n3 - 0.5));
     vec3 rockc = W3(ba, bb, vec3(0.46, 0.44, 0.41), vec3(0.55, 0.52, 0.47), vec3(0.44, 0.46, 0.52), vec3(0.28, 0.25, 0.24),
                     vec3(0.34, 0.33, 0.28), vec3(0.52, 0.5, 0.48));
-    float strata = 0.86 + 0.18 * sin(p.z * 0.22 + gfbm(q / 60.0) * 5.0) + 0.12 * (n3 - 0.5);
+    float strata = 0.86 + 0.18 * sin(p.z * 0.22 + n2 * 9.0) + 0.12 * (n3 - 0.5);
     s.alb = mix(s.alb, dirtc * (0.9 + 0.2 * n3), soil * 0.7);
     s.alb = mix(s.alb, rockc * strata, rock * 0.9);
 
@@ -258,9 +258,10 @@ void main() {
     // ---- the Mire: dark wet mud, shiny puddles
     float wet = 0.0;
     if (mire > 0.01) {
-        float mud = smoothstep(0.52, 0.64, gfbm(q / 95.0 + 21.0));
+        float mf = gfbm(q / 95.0 + 21.0);
+        float mud = smoothstep(0.52, 0.64, mf);
         s.alb = mix(s.alb, vec3(0.2, 0.18, 0.12) * (0.85 + 0.3 * n3), mud * mire * 0.75);
-        wet = smoothstep(0.66, 0.72, gfbm(q / 95.0 + 21.0) + 0.06 * (n3 - 0.5)) * mire;
+        wet = smoothstep(0.66, 0.72, mf + 0.06 * (n3 - 0.5)) * mire;
     }
     // (WETNESS: a rain term would add to `wet` here)
     s.alb *= 1.0 - 0.35 * wet;
