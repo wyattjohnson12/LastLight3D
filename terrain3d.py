@@ -146,13 +146,16 @@ class Terrain3D:
 
     def _hill_init(self, vs, lib, fs):
         ctx = self.ctx
-        p = self._hill_prog = ctx.program(vertex_shader=vs, geometry_shader=GROUND_GEO.replace("%LIB%", lib),
-                                          fragment_shader=fs)
+        # ground3d.py: the same heightfield with painterly detail from the world position (and flat when the
+        # hills are off, so it draws the flat ground of old worlds and underground layers too)
+        import ground3d
+        import lighting3d
+        p = self._hill_prog = ctx.program(vertex_shader=vs,
+                                          geometry_shader=ground3d.geometry(GROUND_GEO.replace("%LIB%", lib)),
+                                          fragment_shader=ground3d.fragment(lighting3d.glsl(frag=True)))
         p["sprite_texture"] = 0
         p["uv_texture"] = 1
-        p["mode"] = 0
-        p["alpha_cut"] = -1.0
-        p["shade"] = 1.0
+        p["g_detail"] = 1
         self._hill_key = None
         self._hill_tex = None
         self._hill_grid = None
@@ -212,8 +215,7 @@ class Terrain3D:
         self._hill_uni = (int(on), m)
         for p in progs:
             self.hill_apply(p)
-        if on:
-            self._hill_prog["hill_max"] = float(g.hmax)
+        self._hill_prog["hill_max"] = float(g.hmax) if on else 0.0
         return on
 
     def hill_apply(self, p):
@@ -226,12 +228,24 @@ class Terrain3D:
         except KeyError:
             pass
 
-    def draw_hill_ground(self, lst, sun):
-        """The ground tiles of the surface as the heightfield (depth test on: hills hide what's behind)."""
+    def draw_hill_ground(self, lst, sun, vl="over"):
+        """The ground tiles as the heightfield (depth test on: hills hide what's behind). With the hills off
+        (old worlds, underground) it's exactly flat. ground3d.py adds the painterly detail."""
         if not len(lst):
             return
+        import ground3d
+        import time
         p = self._hill_prog
         p["sun"] = sun
+        gm = ground3d.ground_map(self) if vl == "over" else None
+        if gm is not None:
+            gm.bind()
+        ground3d.apply(p, gm, vl == "over")
+        p["g_under"] = int(vl != "over")
+        autumn, winter = ground3d.season_k(self)
+        p["g_autumn"] = autumn
+        p["g_winter"] = winter
+        p["g_time"] = time.perf_counter() % 3600.0
         lst._init_deferred()
         old = lst.data.program
         lst.data.program = p
