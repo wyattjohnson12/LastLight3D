@@ -30,6 +30,7 @@ from arcade.gl import BufferDescription
 from pyglet import gl
 from pyglet.math import Mat4, Vec3
 
+import fphands3d
 import fx3d
 import lighting3d
 import models3d
@@ -1034,6 +1035,8 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
                 self.ground_ring(t.center_x, t.center_y, 30, (255, 150, 190, 200), 2, lit=True)
         ctx.enable(ctx.DEPTH_TEST)
         self.fx_draw_particles(vl, additive=False)    # chips, dust, blood, smoke (lit like the rest)
+        if fp:
+            fphands3d.draw(self, L, vl, dk)    # fphands3d.py: your arms and what they hold (still lit)
         ctx.disable(ctx.DEPTH_TEST)
         self._lt.write("glow")      # glows from here on: not darkened, faded out (not fogged) far away
 
