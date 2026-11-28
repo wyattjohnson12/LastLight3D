@@ -109,7 +109,9 @@ void main() {
     }
     vec3 n = normalize(v_nrm);
     vec3 sun = ((0.62 + 0.08 * n.z) * lt_hemi(n) + 0.5 * max(dot(n, light), 0.0)) * lt_sunlit(v_pos, n);
-    vec3 lit = lt_light(v_pos, n);
+    // like lt_light, but the arms are right in front of your eyes: fires light them a little more softly and
+    // never quite to full (they would glare and bloom at night)
+    vec3 lit = min(lt_amb.rgb + 0.7 * lt_points(v_pos, n), max(lt_amb.rgb, vec3(0.9)));
     if (torch.w > 0.0) {        // the flame right next to your hand
         vec3 d = torch.xyz - v_pos;
         float dist = length(d);
@@ -867,7 +869,7 @@ class Hands:
         self.t = t
         if item != self.item:
             if self.eat_t < 0 or self.eat_item is None:
-                self.switch = 0.0 if self.item is not None or item is not None else 1.0
+                self.switch = 0.0 if dt > 0 else 1.0        # (not on the very first frame)
             self.prev_item, self.item = self.item, item
             self.swing_t = -1.0
         self.switch = min(1.0, self.switch + dt / 0.28)
