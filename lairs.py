@@ -737,6 +737,8 @@ def draw3d(game, L, vl, stage="props"):
     dk = game.darkness
     glow = (game.ctx.SRC_ALPHA, game.ctx.ONE)
     for lair in st.lairs.values():
+        if hasattr(game, "near_point") and not game.near_point(lair.x, lair.y):
+            continue                             # view3d.py: too far away to see
         spire = f"lair_spire_{lair.kind}" + ("_quiet" if lair.quiet else "")
         altar = "lair_altar_quiet" if lair.quiet else f"lair_altar_{lair.kind}"
         lst = lair.spires[bool(lair.quiet)]
@@ -745,7 +747,7 @@ def draw3d(game, L, vl, stage="props"):
         if dk > 0.05 and not lair.quiet:         # the runes and embers shine through the night
             game.mesh(lst, spire, blend=glow, glow=True)
             game.mesh(lair.altars, altar, blend=glow, glow=True)
-    game.mesh(st.bones, "lair_bones")
+    game.mesh(game.near_list(st.bones) if hasattr(game, "near_list") else st.bones, "lair_bones")
 
 
 def debug_spot(game, kind):

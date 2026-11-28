@@ -1105,11 +1105,6 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
                     self.hit_enemy(hit, s.dmg, by, s.vx / sp, s.vy / sp)
                     s.done = True
                     continue
-                if s.kind == "fireball":
-                    if s.t >= s.T:
-                        s.done = True
-                        self.fireball_burst(s, by)
-                    continue
                 beast = next((a for a in L.animals if not a.pet and dist((s.x, s.y), a.position) < 22), None)
                 if beast is not None:
                     self.hit_animal(beast, s.dmg, by, s.vx / sp, s.vy / sp)

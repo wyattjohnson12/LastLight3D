@@ -569,15 +569,17 @@ def _grow(game, step):
 
 
 # --------------------------------------------------------------------------- fishing
+FISH_WAIT = (1.5, 4.0)           # seconds until a fish bites (x0.7 in the meadow)
+FISH_BITE = 2.6                  # seconds you have to swing once it bites
 def _water_spot(game, p):
-    """Where a cast from p lands: the first water 70..190 px in front (river, lake or pond)."""
+    """Where a cast from p lands: the first water 40..280 px in front (river, lake or pond)."""
     fx, fy = math.cos(p.face), math.sin(p.face)
-    for d in range(70, 200, 15):
+    for d in range(40, 290, 12):
         x, y = p.pos[0] + fx * d, p.pos[1] + fy * d
         if game.terrain_water(x, y, "over") and not tmap(game).cell(x, y) & TM.BRIDGE:
             return x, y, True
         for s in game.over.ponds:
-            if _dist((x, y), s.position) < 62:
+            if _dist((x, y), s.position) < 80:
                 return x, y, False
     return None
 
@@ -588,9 +590,8 @@ def _fish_swing(game, p):
     if c is not None:
         if c["bite"] > 0:
             _catch(game, p, c)
-        else:
-            game.say("Reeled in - nothing yet. Wait for the bite (the bobber dips), then swing!", 2, to=p)
-            _uncast(game, p.id)
+        else:       # too early: the line stays in the water (switch items or walk off to stop fishing)
+            game.say("Not yet - wait for the BITE (the bobber dips), then swing!", 1.6, to=p)
         return True
     spot = _water_spot(game, p)
     if spot is None:
@@ -598,7 +599,7 @@ def _fish_swing(game, p):
         return True
     x, y, river = spot
     meadow = game.biome_at((x, y)) == NAME
-    c = r.casts[p.id] = {"x": x, "y": y, "t": random.uniform(2.5, 7.0) * (0.7 if meadow else 1.0), "bite": 0.0,
+    c = r.casts[p.id] = {"x": x, "y": y, "t": random.uniform(FISH_WAIT[0], FISH_WAIT[1]) * (0.7 if meadow else 1.0), "bite": 0.0,
                          "river": river}
     game.play("place", 0.2, at=(x, y), layer="over")
     if game.biome_emit(NAME, ["cast", p.id, round(x, 1), round(y, 1)]):
@@ -635,21 +636,21 @@ def _update_casts(game, dt):
     for pid, c in list(r.casts.items()):
         p = game.players.get(pid)
         if p is None or not p.alive or p.layer != "over" or p.hotbar[p.selected] != "fishing_rod" or \
-                _dist(p.pos, (c["x"], c["y"])) > 280:
+                _dist(p.pos, (c["x"], c["y"])) > 360:
             _uncast(game, pid)
             continue
         if c["bite"] > 0:
             c["bite"] -= dt
             if c["bite"] <= 0:
-                c["t"] = random.uniform(3.0, 7.0)
+                c["t"] = random.uniform(FISH_WAIT[0], FISH_WAIT[1])
                 game.say("It got away... wait for the next bite.", 1.6, to=p)
                 if game.biome_emit(NAME, ["bite", pid, 0]):
                     _ev_bite(game, pid, 0)
             continue
         c["t"] -= dt
         if c["t"] <= 0:
-            c["bite"] = 1.4
-            game.say("A BITE! Swing now!", 1.4, to=p)
+            c["bite"] = FISH_BITE
+            game.say("A BITE! Swing now!", FISH_BITE, to=p)
             game.play("drink", 0.4, at=(c["x"], c["y"]), layer="over")
             game.burst(c["x"], c["y"], (200, 230, 255), 8, 70, layer="over")
             game.rumble(0.5, 0.2, to=p)

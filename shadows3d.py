@@ -36,6 +36,8 @@ import terrain3d
 
 SHADOW_RES = 2048               # shadow map size ("on")
 SHADOW_RES_LOW = 1024           # ... and on "low"
+SHADOW_EVERY = 4                # redraw the shadow map every this many frames ("low": twice that)...
+SHADOW_MOVE = 0.08              # ... or sooner once the camera's area has moved this part of its radius
 SUN_DARK = 0.5                  # how much of the daylight a full shadow takes away at noon
 FP_REACH = 1500.0               # first person: shadows reach this far ahead (then fade out)
 TOWARD_SUN = 1500.0             # the box reaches this far towards the sun (tall things off to the side)
@@ -107,6 +109,7 @@ class SunShadows:
             raise RuntimeError("the shadow map framebuffer isn't complete")
 
     def _sh_fail(self, e):
+        self._sh_last = None
         print("Sun shadows switched off - this graphics card didn't like them:", e)
         self._sh_broken = True
         self._sh_pass = False
@@ -177,8 +180,22 @@ class SunShadows:
             sx, sy = sun
             n = math.sqrt(sx * sx + sy * sy + 1.4 * 1.4)
             sun_dir = (-sx / n, -sy / n, 1.4 / n)           # the same as lighting3d's lt_sun
-            view, proj, texel, depth = self._sh_matrices(sun_dir, self._sh_area(fp), res)
-            self._sh_draw(L, vl, fp, built_geo, view, proj, res)
+            area = self._sh_area(fp)
+            last = getattr(self, "_sh_last", None)
+            self._sh_count = getattr(self, "_sh_count", 0) + 1
+            every = SHADOW_EVERY * (2 if low else 1)
+            reuse = (last is not None and not getattr(self, "local", False) and last["res"] == res
+                     and last["fp"] == fp and self._sh_count - last["n"] < every
+                     and abs(area[3] - last["area"][3]) < 1.0
+                     and math.hypot(area[0] - last["area"][0], area[1] - last["area"][1]) < area[3] * SHADOW_MOVE
+                     and max(abs(a - b) for a, b in zip(sun_dir, last["sun"])) < 0.01)
+            if reuse:       # the map from a frame or two ago still covers this view: no second world draw
+                view, proj, texel, depth = last["m"]
+            else:
+                view, proj, texel, depth = self._sh_matrices(sun_dir, area, res)
+                self._sh_draw(L, vl, fp, built_geo, view, proj, res)
+                self._sh_last = {"res": res, "fp": fp, "n": self._sh_count, "area": area, "sun": sun_dir,
+                                 "m": (view, proj, texel, depth)}
         except Exception as e:      # noqa: BLE001 - never let a graphics extra stop the game
             self._sh_fail(e)
             return

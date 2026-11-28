@@ -53,6 +53,15 @@ CAVE_PATTERN = 4
 TRUNK_LIFT = 34                # sprite.depth of a standing tree (stumps are 0) - shapes3d picks the shape by it
 HIVE_LIFT = 16                 # beehives hang under the canopy (tilted-camera cut-out)
 HIVE_Z = 64                    # beehives: how high the bottom of the 3D hive hangs
+# Draw distance (_by_kind): the world keeps running everywhere; only what's too far to see isn't drawn.
+CULL_STEP = 160                  # rebuild the drawn lists after the camera moves this far...
+CULL_TURN = 15                   # ... or (first person) turns this many degrees
+CULL_MARGIN = 420                # extra around the tilted camera's view, so nothing pops in at the edge
+CULL_NEAR = 650                  # first person: always draw this close, even behind you (shadows, turning)
+CULL_FP_FAR = 3200               # first person: how far you can see trees and rocks
+CULL_FP_SMALL = 1100             # first person: small props (flowers, crates, rocks...) - each kind is a draw call
+CULL_SMALL_SIZE = 64             # a sprite narrower than this (px) counts as a small prop
+CULL_FP_COS = math.cos(math.radians(95))   # first person: a cone much wider than the view (it's ~48 each side)
 MESH_BUILDS = ("campfire", "brazier", "workbench", "storage", "arrow_turret", "furnace", "lantern", "gate")
 NUDGE_FLAG = 1000.0            # sprite.depth >= this means "draw a bit in front" (beehives in trees)
 
@@ -690,16 +699,20 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
                 p["glow_pass"] = 0
 
     def _by_kind(self, lst, ver=0):
-        """The sprites of `lst` split into one SpriteList per .kind (rebuilt only when `lst` changes).
-        The sprites stay in `lst` too, so the game never notices."""
+        """The sprites of `lst` near enough to be seen, split into one SpriteList per .kind. Rebuilt only when
+        `lst` changes or the camera has moved / turned a fair way (see _cull_frame), so most frames reuse the
+        last lists. The sprites stay in `lst` too, so the game never notices - this only skips drawing."""
         got = self._kinds3d.get(id(lst))
-        sig = (len(lst), ver)
+        sig = (len(lst), ver, getattr(self, "_cull_key", None))
         if got is None or got[0] != sig or got[1] is not lst:
             if got is not None:
                 for sub in got[2].values():
                     sub.clear()
+            near = self._cull_test()
             groups = {}
             for s in lst:
+                if near is not None and not near(s.center_x, s.center_y, s.width < CULL_SMALL_SIZE):
+                    continue
                 kind = shapes3d.shape_key(s)
                 if kind not in groups:
                     groups[kind] = arcade.SpriteList()
@@ -710,12 +723,82 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
             got = self._kinds3d[id(lst)] = (sig, lst, groups)
         return got[2]
 
+    def near_list(self, lst):
+        """`lst` cut down to what the camera could see (cached like _by_kind) - for other modules' props."""
+        if getattr(self, "_cull_key", None) is None:
+            return lst
+        got = self._kinds3d.get(("near", id(lst)))
+        sig = (len(lst), self._cull_key)
+        if got is None or got[0] != sig or got[1] is not lst:
+            near = self._cull_test()
+            sub = got[2] if got is not None else arcade.SpriteList()
+            sub.clear()
+            for s in lst:
+                if near(s.center_x, s.center_y, s.width < CULL_SMALL_SIZE):
+                    sub.append(s)
+            got = self._kinds3d[("near", id(lst))] = (sig, lst, sub)
+        return got[2]
+
+    def near_point(self, x, y):
+        """Could the camera see something standing at (x, y)? (True when there's no draw distance.)"""
+        near = self._cull_test() if getattr(self, "_cull_key", None) is not None else None
+        return near is None or near(x, y)
+
+    def _cull_frame(self):
+        """Once per view: where the camera is and which way it looks, rounded so small moves change nothing."""
+        if getattr(self, "local", False):      # split screen: several cameras a frame - just draw everything
+            self._cull = self._cull_key = None
+            return
+        (ex, ey, _), f, _, _, _, vw, vh = self._basis()
+        if self.fp_on():
+            fx, fy = f[0], f[1]
+            n = math.hypot(fx, fy) or 1.0
+            self._cull = ("fp", ex, ey, fx / n, fy / n)
+            yaw = int(math.degrees(math.atan2(fy, fx)) // CULL_TURN)
+            self._cull_key = ("fp", int(ex // CULL_STEP), int(ey // CULL_STEP), yaw)
+        else:
+            cx, cy = self.view_pos()
+            r = math.hypot(vw, vh) + CULL_MARGIN      # the tilted camera sees further up the screen
+            self._cull = ("top", cx, cy + vh * 0.35, r)
+            self._cull_key = ("top", int(cx // CULL_STEP), int(cy // CULL_STEP), int(r // CULL_STEP))
+
+    def _cull_test(self):
+        """A test (x, y) -> drawn?  for the camera _cull_frame saw last (None = draw everything).
+        Uses the camera from when the lists were last built, plus a margin, so nothing at the edge pops."""
+        c = getattr(self, "_cull", None)
+        if c is None:
+            return None
+        if c[0] == "fp":
+            _, ex, ey, fx, fy = c
+            far2, near2, cos_k = CULL_FP_FAR ** 2, CULL_NEAR ** 2, CULL_FP_COS
+
+            small2 = CULL_FP_SMALL ** 2
+
+            def near(x, y, small=False):
+                dx, dy = x - ex, y - ey
+                d2 = dx * dx + dy * dy
+                if d2 < near2:
+                    return True            # right around you (and what casts shadows onto you) always
+                if d2 > (small2 if small else far2):
+                    return False
+                return dx * fx + dy * fy > cos_k * math.sqrt(d2)    # in front, inside a wide cone
+            return near
+        _, cx, cy, r = c
+        r2 = r * r
+
+        def near(x, y, small=False):
+            dx, dy = x - cx, y - cy
+            return dx * dx + dy * dy < r2
+        return near
+
     def draw_kinds(self, lst, ver=0, shaped=None):
         """Draw a mixed list: kinds with a 3D shape as shapes, the rest as cut-outs."""
         for kind, sub in self._by_kind(lst, ver).items():
             if not len(sub):
                 continue
             sh = shapes3d.SHAPES.get(kind) if shaped is None or kind in shaped else None
+            if self._sh_pass and sub[0].width < CULL_SMALL_SIZE:
+                continue        # small props cast no sun shadow (they keep their soft blob): a draw call each
             if sh is None:
                 self.stand(sub)
                 continue
@@ -887,6 +970,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         self._init3d()
         ctx = self.ctx
         view = self.view_pos()
+        self._cull_frame()           # only draw trees, rocks, bushes and buildings that could be on screen
         self._trees(L, view)
         cave_geo = self._cave_walls(L) if vl != "over" else None   # any underground layer
         built_geo = self._built_walls(L)
@@ -1150,7 +1234,6 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
                 if p0 and p1:
                     arcade.draw_line(*p0, *p1, (214, 180, 120, 255), 3)
                     arcade.draw_circle_filled(p1[0], p1[1], 2.5, (210, 214, 224, 255))
-                    arcade.draw_circle_filled(p[0], p[1], 4, (255, 240, 180, 255))
             else:
                 g = self.project(s.x, s.y, 0)
                 p = self.project(s.x, s.y, h)

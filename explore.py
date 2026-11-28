@@ -931,6 +931,7 @@ def draw3d(game, L, vl, stage="props"):
     if stage != "props":
         return
     for kind, lst in st.lists.get(vl, {}).items():
+        lst = game.near_list(lst) if hasattr(game, "near_list") else lst    # view3d.py: draw distance
         if len(lst):
             game.mesh(lst, kind)
 
