@@ -32,6 +32,7 @@ from arcade.gl.backends.opengl.framebuffer import OpenGLFramebuffer
 from arcade.gl.geometry import quad_2d_fs
 from pyglet import gl
 
+RENDER_SCALE = 1.0               # world picture pixels per game-layout unit (1.0 = 1100 x 720; lower = faster)
 MSAA_SAMPLES = 4                 # what "Smooth edges" asks for (less if the graphics card can't do 4)
 GLOW_DAY, GLOW_NIGHT = 0.6, 3.0    # how strongly the glowing things bloom, day -> full night
 GLOW_SOFT = (0.04, 0.30)        # glow light fainter than this hardly blooms (soft edges, faint sprites)
@@ -141,7 +142,7 @@ class _HiDPIFramebuffer(OpenGLFramebuffer):
     Retina Mac). A plain offscreen framebuffer wouldn't, and the world would land in one corner."""
 
     def _ratio(self):
-        return self.ctx.window.get_pixel_ratio()
+        return self.ctx.window.post_ratio()
 
     @OpenGLFramebuffer.viewport.setter
     def viewport(self, value):
@@ -160,6 +161,18 @@ class Post3D:
     _post_broken = False
     _post_active = False
     _post_no_ms = False
+
+    # ------------------------------------------------------------------ speed
+    def post_ratio(self):
+        """Real pixels per window unit for the offscreen world picture. The game is laid out for 1100 x 720, so
+        it is drawn at about that size and stretched to fit: a Retina Mac in fullscreen would otherwise draw
+        ~3000 x 2000 pixels (x4 for smooth edges) every frame - many times the work, for little visible gain."""
+        s = self.fit[0] if getattr(self, "fit", None) else 1.0
+        return max(0.25, min(self.get_pixel_ratio(), RENDER_SCALE / max(s, 1e-6)))
+
+    def post_offscreen(self):
+        """Draw the world offscreen (at the capped size above)? Yes unless the graphics card refused."""
+        return not self._post_broken
 
     # ------------------------------------------------------------------ options
     def post_wanted(self):
@@ -232,7 +245,8 @@ class Post3D:
         return _HiDPIFramebuffer(ctx, color_attachments=[col], depth_attachment=dep)
 
     def _post_main_fbo(self):
-        size = tuple(int(v) for v in self.get_framebuffer_size())
+        r = self.post_ratio()
+        size = tuple(int(v * r) for v in self.get_size())
         size = (max(16, size[0]), max(16, size[1]))
         key = (size, self._post_samples())
         if self._post_main is None or self._post_main_key != key:
@@ -261,7 +275,10 @@ class Post3D:
         def target(tw, th, dtype="f1"):
             tex = ctx.texture((max(1, tw), max(1, th)), components=4, dtype=dtype, filter=lin,
                               wrap_x=ctx.CLAMP_TO_EDGE, wrap_y=ctx.CLAMP_TO_EDGE)
-            return ctx.framebuffer(color_attachments=[tex]), tex
+            fbo = ctx.framebuffer(color_attachments=[tex])
+            fbo.clear()                 # start black (glow off never draws into the blur ones)
+            ctx.active_framebuffer.use(force=True)
+            return fbo, tex
 
         t = {
             "final": target(w, h),
@@ -277,7 +294,7 @@ class Post3D:
 
     def _post_rect(self):
         """This view's rectangle in real framebuffer pixels (left, bottom, width, height)."""
-        r = self.get_pixel_ratio()
+        r = self.post_ratio()
         vx, vy, vw, vh = self.camera.viewport.lbwh
         fw, fh = self._post_main.width, self._post_main.height
         x0, y0 = max(0, int(vx * r)), max(0, int(vy * r))
@@ -308,7 +325,7 @@ class Post3D:
     def post_begin(self, vl):
         """Start of draw_world_3d: send the world into the offscreen picture (if glow effects are on)."""
         self._post_active = False
-        if not self.post_wanted():
+        if not self.post_offscreen():
             return
         try:
             self._post_init()
@@ -330,7 +347,7 @@ class Post3D:
 
     def post_glow(self):
         """Just before the glowing things are drawn: remember the picture so we know what they added."""
-        if not self._post_active or self._post_marked:
+        if not self._post_active or self._post_marked or not self.post_wanted():
             return                          # (view3d calls this twice; the first call per view counts)
         try:
             x, y, w, h = self._post_rect_px
@@ -355,15 +372,17 @@ class Post3D:
             depth = ctx.is_enabled(ctx.DEPTH_TEST)
             ctx.disable(ctx.BLEND, ctx.DEPTH_TEST)
             p = self._post_progs
+            glow = self.post_wanted()
             ex = p["extract"]
             ex["has_base"] = int(self._post_marked)
             ex["glow_k"] = GLOW_DAY + (GLOW_NIGHT - GLOW_DAY) * dk
             ex["glow_lo"], ex["glow_hi"] = GLOW_SOFT
             ex["knee"] = BRIGHT_KNEE
             ex["bright_k"] = BRIGHT_DAY + (BRIGHT_NIGHT - BRIGHT_DAY) * dk
-            self._post_pass(ex, t["half"], t["final"][1], t["base"][1])
             down, blur = p["down"], p["blur"]
-            for src, a, b in (("half", "q_a", "q_b"), ("q_a", "e_a", "e_b")):
+            if glow:
+                self._post_pass(ex, t["half"], t["final"][1], t["base"][1])
+            for src, a, b in ((("half", "q_a", "q_b"), ("q_a", "e_a", "e_b")) if glow else ()):
                 stex = t[src][1]
                 down["texel"] = (1.0 / stex.width, 1.0 / stex.height)
                 self._post_pass(down, t[a], stex)
@@ -373,9 +392,9 @@ class Post3D:
                 blur["step"] = (0.0, 1.0 / at.height)
                 self._post_pass(blur, t[a], t[b][1])
             comp = p["comp"]
-            comp["near_k"] = NEAR_K
-            comp["wide_k"] = WIDE_K
-            comp["grade"] = max(0.0, min(1.0, dk))
+            comp["near_k"] = NEAR_K if glow else 0.0       # glow off: just stretch the picture onto the screen
+            comp["wide_k"] = WIDE_K if glow else 0.0
+            comp["grade"] = max(0.0, min(1.0, dk)) if glow else 0.0
             self.gui.use()                  # this view's viewport + scissor on the screen
             for i, tex in enumerate((t["final"][1], t["q_a"][1], t["e_a"][1])):
                 tex.use(i)

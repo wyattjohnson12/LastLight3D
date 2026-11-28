@@ -44,8 +44,6 @@ import pets
 import progress
 import repair
 import savegame
-import spells
-import elements
 import ui
 import venom
 import view3d
@@ -152,7 +150,7 @@ class Survivor:
 
 
 # =========================================================================== game
-class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, post3d.Post3D, options.Options, spells.Spells, savegame.SaveGame, pets.Pets, repair.Repair,
+class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, post3d.Post3D, options.Options, savegame.SaveGame, pets.Pets, repair.Repair,
                 backpack.Backpacks,
                 progress.Progress, weather.Weather, defenses.Defenses, swamp.Swamp, ui.UI, arcade.Window):
     def __init__(self):
@@ -240,7 +238,6 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             for n in [s for s in L.solid if getattr(s, "kind", None) in WALKABLE_NODES]:
                 L.solid.remove(n)
         self.animal_cap = int(ANIMAL_CAP * min(2.0, biomes.area_scale(self.worldgen)))
-        self.place_shrines()       # spells.py: one spell shrine per element, deep in the cave (own random stream)
         self.centre = (self.world_size / 2, self.world_size / 2)
         self.player_list = arcade.SpriteList()
         self.held_list = arcade.SpriteList()
@@ -448,8 +445,6 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
                 self.pad.rumble(s, d)
 
     def apply_event(self, ev):
-        if self.spell_event(ev):   # spells.py
-            return
         k = ev[0]
         if k == "snd":
             self._play(ev[1], ev[2], ev[3])
@@ -780,8 +775,6 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             return
         if self.near_exit(p):
             self.travel(p)
-        elif self.near_shrine(p):
-            self.learn_at_shrine(p, self.near_shrine(p))     # spells.py
         elif lairs.near_altar(self, p):       # lairs.py: wake a boss
             lairs.use_altar(self, p, lairs.near_altar(self, p))
         elif explore.open_near(self, p):      # explore.py: search an abandoned place's chest
@@ -1018,9 +1011,6 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             return
         if self.biome_swing(p, item, w):           # biomes.py: fishing rods, hoes, picking crops...
             return
-        if w.get("spellbook"):                      # spells.py
-            self.cast(p)
-            return
         allround = bool(w.get("quake"))
 
         def in_front(pos, reach, cone=0.45):
@@ -1104,20 +1094,15 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             L = self.layers[s.layer]
             by = self.players.get(s.owner)
             self.fx_layer = s.layer
-            if s.kind in ("arrow", "fireball"):
+            if s.kind == "arrow":
                 if s.layer != "over" and arcade.get_sprites_at_point((s.x, s.y), L.walls):
                     s.done = True
-                    if s.kind == "fireball":
-                        self.fireball_burst(s, by)
                     continue
                 sp = math.hypot(s.vx, s.vy) or 1
                 hit = next((e for e in list(L.zombies) + list(L.bosses)
                             if dist((s.x, s.y), e.position) < e.radius + 8), None)
                 if hit is not None:
-                    if s.kind == "fireball":
-                        self.fireball_burst(s, by)        # spells.py
-                    else:
-                        self.hit_enemy(hit, s.dmg, by, s.vx / sp, s.vy / sp)
+                    self.hit_enemy(hit, s.dmg, by, s.vx / sp, s.vy / sp)
                     s.done = True
                     continue
                 if s.kind == "fireball":
@@ -1143,10 +1128,10 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         for z in list(L.zombies):
             if dist(z.position, (s.x, s.y)) < r + z.radius * 0.5:
                 z.burn = max(z.burn, 3.0)
-                self.hit_enemy(z, s.dmg, by, element="fire")
+                self.hit_enemy(z, s.dmg, by)
         for b in list(L.bosses):
             if dist(b.position, (s.x, s.y)) < r + b.radius:
-                self.hit_enemy(b, s.dmg, by, element="fire")
+                self.hit_enemy(b, s.dmg, by)
         for a in list(L.animals):
             if not a.pet and dist(a.position, (s.x, s.y)) < r:
                 self.hit_animal(a, s.dmg, by)
@@ -1164,14 +1149,9 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         if angry:
             self.say("BZZZ! The bees are angry - run, or swat them!", 2.5, to=p)
 
-    def hit_enemy(self, z, dmg, by=None, fx=0.0, fy=0.0, w=None, element=None):
+    def hit_enemy(self, z, dmg, by=None, fx=0.0, fy=0.0, w=None):
         if isinstance(z, Boss) and getattr(z, "state", "") == "flee":
             return                         # it's escaping into the dawn - no cheap last hits
-        element = element or (w or {}).get("element")
-        if element:                        # elements.py: weaknesses and resistances
-            m = elements.multiplier(element, z)
-            dmg *= m
-            self.note_element(z, element, m)
         z.hp -= dmg
         if isinstance(z, Boss) and z.state == "flee" and z.hp > 0:
             self.boss_hp = z.hp            # running off at dawn: it still takes the wound home with it
@@ -2638,8 +2618,6 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
                 self.tame(p, net.whole(kw.get("aid"), -1))
             elif a == "pets":
                 self.command_pets(p)
-            elif a == "spellnext":
-                self.next_spell(p)
             elif a in ("petmode", "petname", "petarmor", "petsall"):
                 self.pet_action(p, a, kw)      # pets.py: only ever touches your own pets
             elif a == "throw":
@@ -2650,6 +2628,24 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
                     self.throw(p, it, x, y)
         except (KeyError, ValueError, TypeError, AttributeError, OverflowError):
             pass
+
+    def merge_shots(self, rows):
+        """Client: the shots in a snapshot from the host. An arrow or fire pot that has just vanished from the
+        snapshot keeps flying for a moment, so quick ones are still seen even if two snapshots arrive together."""
+        now = self.flame_t
+        new = []
+        for kind, x, y, vx, vy, t, T, ly in rows:
+            s = Shot(kind, x, y, vx, vy, T, layer=LAYERS[ly])
+            s.t = t
+            new.append(s)
+        for old in self.shots:
+            if old.t >= old.T or any(n.kind == old.kind and math.dist((n.x, n.y), (old.x, old.y)) < 70 for n in new):
+                continue
+            if not hasattr(old, "gone_at"):
+                old.gone_at = now + 0.1
+            if now < old.gone_at:
+                new.append(old)
+        return new
 
     def send_snapshots(self):
         li = LAYERS.index
@@ -2763,7 +2759,7 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             self.boss_day, self.boss_num = m["bd"][0], m["bd"][1]
             self.boss_hp = 1 if m["bd"][2] else None
         lairs.net_apply(self, m.get("lr"))
-        self.shots = self.merge_shots(m.get("sh", []))     # spells.py: quick shots stay visible
+        self.shots = self.merge_shots(m.get("sh", []))     # quick shots stay visible
         if "nm" in m:
             self.apply_node_moves(m["nm"])     # base.py: before the states, so regrown trees get the right look
         if "n" in m:
@@ -3238,8 +3234,6 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             else:
                 tx, ty = self.aim_world()
             self.action("throw", x=tx, y=ty, s=me.selected)
-        elif ITEMS[sel].get("spellbook"):
-            self.action("spellnext")          # spells.py: right-click / LT switches spell
 
     def on_mouse_release(self, x, y, button, modifiers):
         if button == arcade.MOUSE_BUTTON_LEFT:

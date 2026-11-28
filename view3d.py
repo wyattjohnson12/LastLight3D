@@ -969,7 +969,6 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
             self.flat(L.builds, BUILD_WALL_HEIGHT, boxes=True)
         if vl != "over":
             self.stand(L.exits)
-            self.stand(getattr(L, "shrines", self._ghost3d), cut=0.05)     # spells.py
         self.biome_draw3d(L, vl, "solid")      # biomes.py: cliffs, bridges, crops, fish (terrain.py)
         self.draw_kinds(L.bushes)
         self.draw_kinds(L.rocks)
@@ -1151,11 +1150,6 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
                 if p0 and p1:
                     arcade.draw_line(*p0, *p1, (214, 180, 120, 255), 3)
                     arcade.draw_circle_filled(p1[0], p1[1], 2.5, (210, 214, 224, 255))
-            elif s.kind == "fireball":
-                p = self.project(s.x, s.y, h)
-                if p:
-                    arcade.draw_circle_filled(p[0], p[1], 15, (255, 120, 30, 90))
-                    arcade.draw_circle_filled(p[0], p[1], 9, (255, 170, 60, 255))
                     arcade.draw_circle_filled(p[0], p[1], 4, (255, 240, 180, 255))
             else:
                 g = self.project(s.x, s.y, 0)

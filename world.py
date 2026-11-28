@@ -66,13 +66,12 @@ class Shot:
         self.t, self.T = 0.0, T
         self.dmg, self.owner, self.layer = dmg, owner, layer
         self.done = False
-        self.element = None      # fireballs etc. (spells.py)
         self.radius = 0.0
 
     @property
     def height(self):
         """How high above the ground it is: arrows fly flat, pots go up and come down."""
-        if self.kind != "pot":       # arrows and fireballs fly flat
+        if self.kind != "pot":       # arrows fly flat
             return 26.0
         k = min(1.0, self.t / self.T)
         return 22.0 + 150.0 * 4 * k * (1 - k)
