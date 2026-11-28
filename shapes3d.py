@@ -3,7 +3,10 @@ shapes3d.py - low-poly 3D shapes for the world's terrain props (used by view3d.p
 
 The game's art is painted from above. Instead of standing those pictures up as flat cut-outs, world
 objects become small 3D shapes built on the GPU, straight from the SpriteLists the game already keeps:
-one geometry-shader draw per kind of object, no per-frame CPU work, nothing to keep in sync.
+no per-frame CPU work, nothing to keep in sync. Each draw call costs a lot on some drivers whatever is in
+it, so view3d.py draws many kinds at once ("shape batches"): every shape is one row of a big table
+texture (Shape.texels) and each sprite says which row it is. The old one-draw-per-kind way (each shape's
+own uniform block) is still there for GPUs that can't do the batches.
 
 (Creatures and other organic, detailed props come from Blender models - models3d.py, see docs/MODELS.md.
 Terrain props - trees, rocks, plants, crystals, buildings - stay in the SHAPES table here.)
@@ -78,19 +81,7 @@ MESH_GEO = """
 layout (points%INV%) in;
 layout (triangle_strip, max_vertices = %VERTS%) out;
 uniform WindowBlock { mat4 projection; mat4 view; } window;
-layout (std140) uniform ShapeBlock {
-    vec4 rings[%RINGS%];    // radius, height, picture radius, shade
-    vec4 pa[%PARTS%];       // at x, y, z ; sway
-    vec4 pb[%PARTS%];       // size x, y, z ; tilt
-    vec4 pc[%PARTS%];       // roll, swing, swing phase, glow
-    vec4 pd[%PARTS%];       // colour a, b, c ; mode (0 drape, 1 drape + fill at (a,b), 2 pick at (a,b) * c, 3 rgb)
-    vec4 pe[%PARTS%];       // reach, jitter, sides, detail (1: skipped far away)
-    ivec4 bands[%BANDS2%];  // (part, ring) pairs
-    ivec4 runs[%INVS%];     // per invocation: band range when standing [x, y), as a stump [z, w)
-    vec4 g0;                // foot x, foot y, turn, alt_below
-    vec4 g1;                // stride, bob, lean, extent (R)
-    vec4 g2;                // depth use (0 alt, 1 lunge, 2 lift)
-};
+%DATA%
 uniform sampler2D sprite_texture;
 uniform sampler2D uv_texture;
 uniform float uv_offset_bias;
@@ -135,19 +126,20 @@ void main() {
     float a = radians(v_angle[0]);
     mat2 rot = mat2(cos(a), -sin(a), sin(a), cos(a));
     mat4 mvp = window.projection * window.view;
-    vec2 foot = g0.xy;
+    %SHAPE%
+    vec2 foot = G0.xy;
     vec2 fs = foot * hs * inflate / R;
-    int du = int(g2.x);
+    int du = int(G2.x);
     float lift = du == 2 ? c.z : 0.0;
     // off screen (most of the map in the tilted view)? skip it before doing any work
-    float rb = g1.w * R * max(max(fs.x, fs.y), 1.0) * 1.15;
+    float rb = G1.w * R * max(max(fs.x, fs.y), 1.0) * 1.15;
     vec4 q = mvp * vec4(c.xy, lift + R, 1.0);
     float bx = rb * abs(window.projection[0][0]);
     float by = rb * abs(window.projection[1][1]);
     if (q.w < -rb || q.x - bx > q.w || q.x + bx < -q.w || q.y - by > q.w || q.y + by < -q.w) return;
     bool far = q.w > 1100.0;
-    bool alt = du == 0 && c.z < g0.w;
-    ivec4 run = runs[pass];
+    bool alt = du == 0 && c.z < G0.w;
+    ivec4 run = RUN(pass);
     int b0 = alt ? run.z : run.x;
     int b1 = alt ? run.w : run.y;
     if (b0 >= b1) return;
@@ -158,8 +150,8 @@ void main() {
     float seed = hash(c.xy * 0.173);
     float lunge = du == 1 ? clamp(c.z, 0.0, 1.0) : 0.0;
     vec2 fwd = rot * vec2(1.0, 0.0);
-    float walk = dot(c.xy, fwd) / R * g1.x * 6.2831853;
-    vec3 base = vec3(c.xy + fwd * (g1.z * lunge * R), lift + g1.y * R * abs(sin(walk)));
+    float walk = dot(c.xy, fwd) / R * G1.x * 6.2831853;
+    vec3 base = vec3(c.xy + fwd * (G1.z * lunge * R), lift + G1.y * R * abs(sin(walk)));
     uint rgba = pack4(v_color[0]);
     int cur = -1;
     bool skip = false;
@@ -170,22 +162,22 @@ void main() {
     vec3 at = vec3(0.0), sz = vec3(1.0);
     mat3 M = mat3(1.0);
     for (int b = b0; b < b1; b++) {
-        ivec4 pr = bands[b >> 1];
+        ivec4 pr = BAND(b >> 1);
         int p = (b & 1) == 0 ? pr.x : pr.z;
         int k = (b & 1) == 0 ? pr.y : pr.w;
         if (p != cur) {
             cur = p;
-            vec4 A = pa[p], B = pb[p], C = pc[p], D = pd[p], E = pe[p];
+            vec4 A = PA(p), B = PB(p), C = PC(p), D = PD(p), E = PE(p);
             mode = int(D.w);
             glow = C.w;
             skip = (glow_pass == 1 && glow <= 0.0) || (E.w > 0.5 && (q.w > 1500.0 || coarse == 1));
             vec4 col = vec4(D.rgb, 1.0);
             if (mode == 1 || mode == 2) {
                 vec4 s = pick(D.xy);
-                col = vec4(s.rgb * (mode == 2 ? D.z : 1.0), s.a < 0.2 ? 0.0 : 1.0);
+                col = vec4(s.rgb * (mode == 2 ? D.z : 1.0), s.a < 0.2 ? CUT : 1.0);
                 if (mode == 2 && s.a < 0.2) skip = true;     // nothing there in this picture (gear)
             }
-            if (mode == 0) col.a = 0.0;
+            if (mode == 0) col.a = CUT;
             fill = pack4(col);
             float tilt = B.w + E.x * lunge + C.y * sin(walk + C.z);
             float ct = cos(tilt), st = sin(tilt), cr = cos(C.x), sr = sin(C.x);
@@ -199,12 +191,12 @@ void main() {
             if (far) sides = max(3, sides / 2);
         }
         if (skip) continue;
-        vec4 r0 = rings[k];
-        vec4 r1 = rings[k + 1];
+        vec4 r0 = RING(k);
+        vec4 r1 = RING(k + 1);
         vec2 n2 = normalize(vec2((r1.y - r0.y) * sz.z, (r0.x - r1.x) * srad) + vec2(1e-5, 0.0));
         float hseed = seed + float(p) * 0.37;
         for (int i = 0; i <= sides; i++) {
-            float ph = g0.z + 6.2831853 * float(i) / float(sides);
+            float ph = G0.z + 6.2831853 * float(i) / float(sides);
             vec2 cs = vec2(cos(ph), sin(ph));
             float j = 1.0 + jit * (hash(vec2(hseed, float(i % sides))) - 0.5) * 2.0;
             float zj = 1.0 + jit * 0.4 * (hash(vec2(hseed, float(i % sides) + 17.0)) - 0.5);
@@ -234,6 +226,94 @@ void main() {
 }
 """
 
+# Where the geometry shader reads a shape from. One shape per draw: its uniform block (as built by Shape).
+UBO_DATA = """
+layout (std140) uniform ShapeBlock {
+    vec4 rings[%RINGS%];    // radius, height, picture radius, shade
+    vec4 pa[%PARTS%];       // at x, y, z ; sway
+    vec4 pb[%PARTS%];       // size x, y, z ; tilt
+    vec4 pc[%PARTS%];       // roll, swing, swing phase, glow
+    vec4 pd[%PARTS%];       // colour a, b, c ; mode (0 drape, 1 drape + fill at (a,b), 2 pick at (a,b) * c, 3 rgb)
+    vec4 pe[%PARTS%];       // reach, jitter, sides, detail (1: skipped far away)
+    ivec4 bands[%BANDS2%];  // (part, ring) pairs
+    ivec4 runs[%INVS%];     // per invocation: band range when standing [x, y), as a stump [z, w)
+    vec4 g0;                // foot x, foot y, turn, alt_below
+    vec4 g1;                // stride, bob, lean, extent (R)
+    vec4 g2;                // depth use (0 alt, 1 lunge, 2 lift)
+};
+#define RING(k) rings[k]
+#define PA(p) pa[p]
+#define PB(p) pb[p]
+#define PC(p) pc[p]
+#define PD(p) pd[p]
+#define PE(p) pe[p]
+#define BAND(i) bands[i]
+#define RUN(i) runs[i]
+#define G0 g0
+#define G1 g1
+#define G2 g2
+#define CUT 0.0             // the fragment shader uses the alpha_cut uniform
+"""
+
+# Many kinds of shape in one draw (view3d.py's shape batches): every shape is one row of a big float
+# texture (the same numbers as its uniform block, in the same order - see Shape.texels), and each sprite
+# brings its row from the vertex shader (TABLE_VS). The shape's own `cut` rides to the fragment shader in
+# the fill colour's alpha (below 128 = not a fill, just the cut).
+TABLE_DATA = """
+uniform sampler2D shape_table;
+flat in int v_shape[];      // row * 2, + 1 for a small prop (casts no sun shadow)
+int srow;
+vec4 G0, G1, G2;
+#define T(i) texelFetch(shape_table, ivec2(i, srow), 0)
+#define RING(k) T(k)
+#define PA(p) T(%OPA% + (p))
+#define PB(p) T(%OPB% + (p))
+#define PC(p) T(%OPC% + (p))
+#define PD(p) T(%OPD% + (p))
+#define PE(p) T(%OPE% + (p))
+#define BAND(i) ivec4(T(%OBAND% + (i)))
+#define RUN(i) ivec4(T(%ORUN% + (i)))
+#define CUT G2.y
+"""
+TABLE_SHAPE = """srow = v_shape[0] >> 1;
+    if (coarse == 1 && (v_shape[0] & 1) == 1) return;     // small props cast no sun shadow
+    G0 = T(%OG%); G1 = T(%OG% + 1); G2 = T(%OG% + 2);"""
+
+# The batches' vertex shader: arcade's sprite one, plus the sprite's shape row. The row is looked up by the
+# sprite's slot in its SpriteList (= gl_VertexID, as arcade draws through an index buffer).
+TABLE_VS = """
+#version 330
+in vec4 in_pos;
+in vec2 in_size;
+in float in_texture;
+in vec4 in_color;
+uniform sampler2D shape_ids;     // per slot: row * 2 (+ 1: small)
+out float v_angle;
+out vec4 v_color;
+out vec2 v_size;
+out float v_texture;
+flat out int v_shape;
+void main() {
+    gl_Position = vec4(in_pos.xyz, 1.0);
+    v_angle = in_pos.w;
+    v_color = in_color;
+    v_size = in_size;
+    v_texture = in_texture;
+    v_shape = int(texelFetch(shape_ids, ivec2(gl_VertexID % %IDW%, gl_VertexID / %IDW%), 0).r + 0.5);
+}
+"""
+# the table's layout: texel offsets of each part of a row (the uniform block's order)
+T_PA = MAX_RINGS
+T_PB, T_PC, T_PD, T_PE = (T_PA + MAX_PARTS * i for i in range(1, 5))
+T_BAND = T_PA + MAX_PARTS * 5
+T_RUN = T_BAND + MAX_BANDS // 2
+T_G = T_RUN + MAX_INV
+TABLE_W = T_G + 3            # texels in one row
+ID_W = 1024                  # the per-slot id texture is this wide
+TABLE_UNIT = 4               # texture units of the table and the ids (0-2 and 6 are taken)
+IDS_UNIT = 5
+
+
 MESH_FS = """
 #version 330
 uniform sampler2D sprite_texture;
@@ -255,7 +335,7 @@ void main() {
         if (fill.a > 0.5) {
             rgb = mix(fill.rgb, t.rgb, smoothstep(0.55, 0.95, t.a));   // foliage: never holes
         } else {
-            if (t.a <= alpha_cut) discard;
+            if (t.a <= max(alpha_cut, fill.a)) discard;       // (batches: the shape's own cut)
             rgb = t.rgb;
         }
     }
@@ -289,16 +369,19 @@ in vec2 gs_uv;
 flat in uint gs_fill;
 void main() {
     if (spritelist_color.a <= 0.0) discard;
-    if (gs_uv.x > -5.0 && (gs_fill >> 24) < 128u && texture(sprite_texture, gs_uv).a <= alpha_cut) discard;
+    uint fa = gs_fill >> 24;
+    if (gs_uv.x > -5.0 && fa < 128u && texture(sprite_texture, gs_uv).a <= max(alpha_cut, float(fa) / 255.0)) discard;
 }
 """
 
 
-def program_sources(lib, invocations=None, verts=MAX_VERTS, shadow=False):
+def program_sources(lib, invocations=None, verts=MAX_VERTS, shadow=False, table=False):
     """GLSL for the shape program. invocations=n (OpenGL 4.0+): one draw call does all n passes of a shape.
     invocations=None: plain 3.3 - the caller draws once per pass with the `pass_id` uniform.
     verts: the most vertices one pass emits (smaller = cheaper on GPUs that emulate geometry shaders).
-    shadow: the depth-only version for the sun's shadow map (shadows3d.py)."""
+    shadow: the depth-only version for the sun's shadow map (shadows3d.py).
+    table: many shapes in one draw (rows of the shape table, see TABLE_DATA) - returns (vertex, geometry,
+    fragment) then; otherwise (geometry, fragment) for arcade's own sprite vertex shader."""
     geo = MESH_GEO
     if invocations:
         geo = geo.replace("%VER%", "410").replace("%INV%", f", invocations = {invocations}")
@@ -306,9 +389,19 @@ def program_sources(lib, invocations=None, verts=MAX_VERTS, shadow=False):
     else:
         geo = geo.replace("%VER%", "330").replace("%INV%", "")
         geo = geo.replace("%PASS%", "pass_id").replace("%PASSUNI%", "uniform int pass_id;")
+    if table:
+        geo = geo.replace("%DATA%", TABLE_DATA).replace("%SHAPE%", TABLE_SHAPE)
+        for k, v in (("%OPA%", T_PA), ("%OPB%", T_PB), ("%OPC%", T_PC), ("%OPD%", T_PD), ("%OPE%", T_PE),
+                     ("%OBAND%", T_BAND), ("%ORUN%", T_RUN), ("%OG%", T_G)):
+            geo = geo.replace(k, str(v))
+    else:
+        geo = geo.replace("%DATA%", UBO_DATA).replace("%SHAPE%", "")
     geo = (geo.replace("%LIB%", lib).replace("%VERTS%", str(verts)).replace("%RINGS%", str(MAX_RINGS))
            .replace("%PARTS%", str(MAX_PARTS)).replace("%BANDS2%", str(MAX_BANDS // 2)).replace("%INVS%", str(MAX_INV)))
-    return geo, SHADOW_FS if shadow else lighting3d.inject(MESH_FS, frag=True)
+    frag = SHADOW_FS if shadow else lighting3d.inject(MESH_FS, frag=True)
+    if table:
+        return TABLE_VS.replace("%IDW%", str(ID_W)), geo, frag
+    return geo, frag
 
 
 # =========================================================================== building blocks
@@ -450,6 +543,20 @@ class Shape:
         data += f("4f", float(DEPTH_USE[depth]), 0.0, 0.0, 0.0)
         self.data = bytes(data)
         self.ubo = None           # GPU buffer, made by view3d on first use
+
+    def texels(self):
+        """This shape as one row of the shape table (TABLE_DATA): its uniform block's numbers as floats, with
+        the cut in g2.y - rounded down to the 1/255 steps it travels to the fragment shader in."""
+        n = len(self.data) // 4
+        nf = (T_BAND) * 4                    # rings and parts: floats
+        ni = (MAX_BANDS // 2 + MAX_INV) * 4  # bands and runs: ints
+        vals = list(struct.unpack(f"{nf}f{ni}i{n - nf - ni}f", self.data))
+        vals[T_G * 4 + 9] = math.floor(self.cut * 255 + 1e-4) / 255
+        return [float(v) for v in vals]
+
+    def batchable(self):
+        """Can this shape go in a shape batch? (its cut has to fit below the fill flag)"""
+        return 0.0 <= self.cut < 0.5
 
 
 # --------------------------------------------------------------------------- ring stacks

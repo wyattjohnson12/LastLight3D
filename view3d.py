@@ -364,6 +364,30 @@ void main() {
 """
 
 
+# =========================================================================== shape batches
+class _ShapeBatch:
+    """Many kinds of 3D shape drawn with ONE call (View3D._sb_draw): a SpriteList holding all their sprites,
+    and a small texture telling the shader which row of the shape table (shapes3d.TABLE_DATA) each sprite
+    slot is. Each draw call costs the same whatever is in it, so this is much cheaper than a call per kind."""
+
+    def __init__(self):
+        self.lst = arcade.SpriteList()
+        self.ids = None              # the slots' shape rows (a float texture, shapes3d.ID_W wide)
+        self.passes, self.verts, self.glow = 1, 16, False
+        self.cut = arcade.SpriteList()   # draw_kinds: kinds without a shape, as upright cut-outs
+        self.lifts = []              # (SpriteList, card_lift): a picture standing on top of the shape
+        self.direct = []             # (SpriteList, shape name): shapes that can't go in a batch
+        self.real = [self.lst]       # every SpriteList drawn as shapes (for the blob shadows)
+
+    def clear(self):
+        self.lst.clear()
+        self.cut.clear()
+        for sub, _ in self.lifts + self.direct:
+            sub.clear()
+        self.lifts, self.direct = [], []
+        self.real = [self.lst]
+
+
 # =========================================================================== the mixin
 class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.SunShadows):
     """Mixed into the game window. Replaces the flat camera with a tilted 3D one."""
@@ -461,6 +485,8 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         self._view3d = self.view
 
     _ring_lit = False
+    _sb_ok = False                 # shape batches work on this GPU (_init3d)
+    _sb_queue = None               # mesh() calls waiting for one batched draw (mesh_batch)
 
     def light_at(self, x, y, z=0.0):
         """The light (r, g, b, 0..1) at a spot z above the ground: the time of day's ambient plus the point
@@ -573,6 +599,20 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
             self._mesh_progs = {}
             self._mesh_prog(1)
         self._mesh_t0 = time.perf_counter()
+        # shape batches (_sb_*): every kind of shape in a list in one draw call. Needs OpenGL 4 invocations;
+        # if this GPU won't build the programs we keep drawing kind by kind
+        self._sb_ok = False
+        self._sb_queue = None
+        self._sb_misc = {}
+        if self._mesh_inv:
+            try:
+                self._sb_init()
+                self._sb_prog(1, shapes3d.MAX_VERTS, False)
+                self._sb_prog(1, shapes3d.MAX_VERTS, True)
+                self._sb_ok = True
+            except Exception as e:      # noqa: BLE001 - the old way still works
+                print("3D shapes: drawing kind by kind -", e)
+                self._mesh_progs = {k: v for k, v in self._mesh_progs.items() if k[0] != "table"}
         self._hill_init(vs, hlib + lighting3d.glsl(), fs)
         for p in (flat, bill, box, self._wall_prog, self._hill_prog):
             lighting3d.bind(p)
@@ -653,6 +693,14 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
             for lst, ver, shaped in ((L.bushes, 0, None), (L.rocks, 0, None),
                                      (L.builds, getattr(self, "struct_ver", 0), MESH_BUILDS),
                                      (L.trees, getattr(self, "nodes_ver", 0), None)):
+                bt = self._kind_batch(lst, ver, shaped)
+                if bt is not None:          # shape batches: the shapes, then the cut-outs
+                    bill["shade"] = shade * (1.0 - k)
+                    for sub in bt.real:
+                        self.stand(sub, shadow=True)
+                    bill["shade"] = shade
+                    self.stand(bt.cut, shadow=True)
+                    continue
                 for kind, sub in self._by_kind(lst, ver).items():
                     real = shapes3d.SHAPES.get(kind) is not None and (shaped is None or kind in shaped)
                     bill["shade"] = shade * (1.0 - k) if real else shade
@@ -673,6 +721,14 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         if glow and self._sh_pass:
             return
         sh = shapes3d.SHAPES[shape]
+        q = self._sb_queue
+        if q is not None:       # a batch is open (mesh_batch): plain draws wait and go in one call
+            if (cut is None and inflate == 1.0 and blend is None and not glow and sh.batchable()
+                    and self._sb_plain(lst) and all(e[0] is not lst for e in q)):
+                q.append((lst, sh, shape))
+                return
+            if q:
+                self._sb_flush()        # (keep the order: what was queued is drawn first)
         if sh.ubo is None:
             sh.ubo = self.ctx.buffer(data=sh.data)
         sh.ubo.bind_to_uniform_block(shapes3d.BINDING)
@@ -793,6 +849,18 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
 
     def draw_kinds(self, lst, ver=0, shaped=None):
         """Draw a mixed list: kinds with a 3D shape as shapes, the rest as cut-outs."""
+        b = self._kind_batch(lst, ver, shaped)
+        if b is not None and self._sb_draw(b):
+            if not self._sh_pass:
+                if len(b.cut):
+                    self.stand(b.cut)
+                for sub, lift in b.lifts:        # e.g. the turret's crossbow stands on its pedestal
+                    s0 = sub[0]
+                    self.stand(sub, lift=min(s0.width, s0.height) / 2 * lift / UP)
+            for sub, kind in b.direct:
+                if not (self._sh_pass and sub[0].width < CULL_SMALL_SIZE):
+                    self.mesh(sub, kind)
+            return
         for kind, sub in self._by_kind(lst, ver).items():
             if not len(sub):
                 continue
@@ -810,10 +878,217 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
     def draw_kind_glows(self, lst, ver=0, shaped=None):
         """The glowing parts of a mixed list's shapes (glowcaps, lantern glass...), added on top of the night."""
         blend = (self.ctx.SRC_ALPHA, self.ctx.ONE)
+        b = self._kind_batch(lst, ver, shaped)
+        if b is not None and self._sb_draw(b, blend=blend, glow=True):
+            for sub, kind in b.direct:
+                if shapes3d.SHAPES[kind].has_glow:
+                    self.mesh(sub, kind, blend=blend, glow=True)
+            return
         for kind, sub in self._by_kind(lst, ver).items():
             sh = shapes3d.SHAPES.get(kind) if shaped is None or kind in shaped else None
             if sh is not None and sh.has_glow and len(sub):
                 self.mesh(sub, kind, blend=blend, glow=True)
+
+    # ------------------------------------------------------------------ shape batches
+    def _sb_init(self):
+        """The shape table: every shape drawn so far, one row each (shapes3d.Shape.texels), grown as needed."""
+        self._sb_rows = {}
+        self._sb_shapes = []
+        self._sb_cap = 0
+        self._sb_table = None
+        self._sb_row(shapes3d.SHAPES["rock"])
+
+    def _sb_row(self, sh):
+        """The table row of shape `sh` (added the first time it's drawn)."""
+        r = self._sb_rows.get(id(sh))
+        if r is not None:
+            return r
+        r = len(self._sb_shapes)
+        self._sb_shapes.append(sh)          # (kept, so its id is never reused)
+        self._sb_rows[id(sh)] = r
+        if r >= self._sb_cap:
+            ctx = self.ctx
+            if self._sb_table is not None:
+                self._sb_table.delete()
+            self._sb_cap = max(64, self._sb_cap * 2)
+            self._sb_table = ctx.texture((shapes3d.TABLE_W, self._sb_cap), components=4, dtype="f4",
+                                         filter=(ctx.NEAREST, ctx.NEAREST))
+            data = array("f", [v for s in self._sb_shapes for v in s.texels()])
+            self._sb_table.write(data, viewport=(0, 0, shapes3d.TABLE_W, len(self._sb_shapes)))
+        else:
+            self._sb_table.write(array("f", sh.texels()), viewport=(0, r, shapes3d.TABLE_W, 1))
+        return r
+
+    def _sb_prog(self, passes, verts, shadow):
+        """The batch program for up to `passes` passes of up to `verts` vertices (shadow: its depth twin)."""
+        key = ("table", passes, verts, shadow)
+        p = self._mesh_progs.get(key)
+        if p is None:
+            vs, geo, frag = shapes3d.program_sources(self._mesh_lib, passes, verts, shadow, table=True)
+            p = self.ctx.program(vertex_shader=vs, geometry_shader=terrain3d.inject(geo, "R * 0.5"),
+                                 fragment_shader=frag)
+            p["sprite_texture"] = 0
+            p["uv_texture"] = 1
+            p["shape_table"] = shapes3d.TABLE_UNIT
+            p["shape_ids"] = shapes3d.IDS_UNIT
+            p["inflate"] = 1.0
+            p["glow_pass"] = 0
+            p["alpha_cut"] = 0.0            # (each shape's own cut comes from the table)
+            lighting3d.bind(p)
+            self.hill_apply(p)              # HILLS (terrain3d.py)
+            self._mesh_progs[key] = p
+        return p
+
+    def _sb_fill(self, b, items):
+        """Put (sprite, shape, small) items into batch b's SpriteList, in order, and upload their rows."""
+        lst = b.lst
+        slot = lst.sprite_slot
+        vals = []
+        passes, verts, glow = 1, 16, False
+        rows = self._sb_rows
+        for s, sh, small in items:
+            if s in slot:
+                continue                    # (a sprite in two of the lists: drawn once)
+            lst.append(s)
+            r = rows.get(id(sh))
+            if r is None:
+                r = self._sb_row(sh)
+            vals.append((slot[s], r * 2 + small))
+            if sh.passes > passes:
+                passes = sh.passes
+            if sh.verts > verts:
+                verts = sh.verts
+            glow = glow or sh.has_glow
+        b.passes, b.verts, b.glow = passes, verts, glow
+        W = shapes3d.ID_W
+        h = max(1, -(-(max((v[0] for v in vals), default=0) + 1) // W))
+        data = array("f", bytes(4 * W * h))
+        for i, v in vals:
+            data[i] = float(v)
+        ctx = self.ctx
+        if b.ids is None or b.ids.height != h:
+            if b.ids is not None:
+                b.ids.delete()
+            b.ids = ctx.texture((W, h), components=1, dtype="f4", filter=(ctx.NEAREST, ctx.NEAREST))
+        b.ids.write(data)
+
+    def _sb_draw(self, b, blend=None, glow=False):
+        """Draw a batch's shapes in one call. False if batches don't work here (then draw the old way)."""
+        if not self._sb_ok:
+            return False
+        if not len(b.lst) or (glow and (self._sh_pass or not b.glow)):
+            return True
+        try:
+            p = self._sb_prog(b.passes, b.verts, self._sh_pass)     # shadow pass: the depth-only twin
+        except Exception as e:      # noqa: BLE001 - this GPU won't: back to one draw per kind
+            print("3D shapes: drawing kind by kind -", e)
+            self._sb_ok = False
+            self._sb_queue = None
+            return False
+        p["coarse"] = int(self._sh_pass)       # small extras (and small props) cast no shadow (cheaper)
+        p.set_uniform_safe("sun", self._progs3d[1]["sun"])     # (only shading: not in the depth twin)
+        p["time"] = time.perf_counter() - self._mesh_t0
+        p["glow_pass"] = int(glow)
+        self._sb_table.use(shapes3d.TABLE_UNIT)
+        b.ids.use(shapes3d.IDS_UNIT)
+        lst = b.lst
+        lst._init_deferred()
+        old = lst.data.program
+        lst.data.program = p
+        try:
+            lst.draw(blend_function=blend)
+        finally:
+            lst.data.program = old
+            if glow:
+                p["glow_pass"] = 0
+        return True
+
+    def _kind_batch(self, lst, ver=0, shaped=None):
+        """draw_kinds' list as one batch (None when batches are off): the sprites near enough to be seen
+        (the same draw distance as _by_kind), kind after kind, rebuilt on the same triggers."""
+        if not self._sb_ok:
+            return None
+        key = ("batch", id(lst))
+        got = self._kinds3d.get(key)
+        sig = (len(lst), ver, getattr(self, "_cull_key", None), shaped)
+        if got is not None and got[0] == sig and got[1] is lst:
+            return got[2]
+        b = got[2] if got is not None else _ShapeBatch()
+        b.clear()
+        near = self._cull_test()
+        groups = {}
+        for s in lst:
+            if near is not None and not near(s.center_x, s.center_y, s.width < CULL_SMALL_SIZE):
+                continue
+            kind = shapes3d.shape_key(s)
+            g = groups.get(kind)
+            if g is None:
+                g = groups[kind] = []
+            g.append(s)
+            lift = shapes3d.FLAME_DEPTH.get(kind)
+            if lift is not None and getattr(s, "extras", None):
+                s.extras[0].depth = lift          # its flame burns on top of the 3D shape
+        items = []
+        for kind, ss in groups.items():
+            sh = shapes3d.SHAPES.get(kind) if shaped is None or kind in shaped else None
+            if sh is None:
+                b.cut.extend(ss)
+                continue
+            if not sh.batchable():
+                sub = arcade.SpriteList()
+                sub.extend(ss)
+                b.direct.append((sub, kind))
+                b.real.append(sub)
+                continue
+            small = int(ss[0].width < CULL_SMALL_SIZE)     # (small props cast no sun shadow)
+            items.extend((s, sh, small) for s in ss)
+            if sh.card_lift is not None:
+                sub = arcade.SpriteList()
+                sub.extend(ss)
+                b.lifts.append((sub, sh.card_lift))
+        self._sb_fill(b, items)
+        self._kinds3d[key] = (sig, lst, b)
+        return b
+
+    def _sb_plain(self, lst):
+        """Can this list's sprites be drawn from another SpriteList? (no list-wide colour, fade or atlas)"""
+        return (lst.visible and tuple(lst.color) == (255, 255, 255, 255)
+                and getattr(lst, "_atlas", None) in (None, self.ctx.default_atlas))
+
+    def mesh_batch(self, on):
+        """mesh_batch(True) ... mesh_batch(False): the plain mesh() calls in between are drawn together, in one
+        call, at the end (or sooner, when a draw that can't join needs them drawn first). Only for draws whose
+        order doesn't matter much (opaque props) and whose lists aren't changed again before the end."""
+        if on:
+            self._sb_queue = [] if getattr(self, "_sb_ok", False) else None
+            return
+        try:
+            self._sb_flush()
+        finally:
+            self._sb_queue = None
+
+    def _sb_flush(self):
+        """Draw what mesh() queued since the batch opened, as one batch. The batch is kept and reused while
+        the same lists hold the same sprites (moving / recolouring them needs no rebuild)."""
+        q = self._sb_queue
+        if not q:
+            return
+        items = list(q)
+        q.clear()
+        key = tuple((id(lst), id(sh)) for lst, sh, _ in items)
+        got = self._sb_misc.pop(key, None)
+        if got is None or any(lst.sprite_list != snap for (lst, _, _), snap in zip(items, got[0])):
+            b = got[1] if got is not None else _ShapeBatch()
+            b.clear()
+            self._sb_fill(b, [(s, sh, 0) for lst, sh, _ in items for s in lst])
+            got = ([list(lst.sprite_list) for lst, _, _ in items], b, [lst for lst, _, _ in items])
+            while len(self._sb_misc) >= 12:         # the oldest batch: let go of its sprites
+                self._sb_misc.pop(next(iter(self._sb_misc)))[1].clear()
+        self._sb_misc[key] = got            # (most recently used last; it also keeps the lists alive)
+        if not self._sb_draw(got[1]):
+            self._sb_queue = None
+            for lst, _, name in items:      # batches just stopped working: the old way
+                self.mesh(lst, name)
 
     # ------------------------------------------------------------------ 3D blocks
     def _box(self, out, x0, y0, x1, y1, h, col, faces, ground=None, pattern=0):
@@ -1053,11 +1328,15 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
             self.flat(L.builds, BUILD_WALL_HEIGHT, boxes=True)
         if vl != "over":
             self.stand(L.exits)
-        self.biome_draw3d(L, vl, "solid")      # biomes.py: cliffs, bridges, crops, fish (terrain.py)
-        self.draw_kinds(L.bushes)
-        self.draw_kinds(L.rocks)
-        self.draw_kinds(L.builds, getattr(self, "struct_ver", 0), MESH_BUILDS)
-        self.draw_packs_3d(vl)       # backpack.py: packs dropped where survivors died
+        self.mesh_batch(True)        # plain props from here (bridges, packs) go in one draw call
+        try:
+            self.biome_draw3d(L, vl, "solid")      # biomes.py: cliffs, bridges, crops, fish (terrain.py)
+            self.draw_kinds(L.bushes)
+            self.draw_kinds(L.rocks)
+            self.draw_kinds(L.builds, getattr(self, "struct_ver", 0), MESH_BUILDS)
+            self.draw_packs_3d(vl)       # backpack.py: packs dropped where survivors died
+        finally:
+            self.mesh_batch(False)
         self.stand(L.flames, lift=2, nudge=2, cut=0.05, sun=False)
         if self.models3d_mode(fp):      # models3d.py: real low-poly 3D creatures (Blender-built models)
             self.models3d_creatures(L, fp)
@@ -1083,7 +1362,11 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
             hsp.alpha = 110 if inside else 255
         self.mesh(L.huts, "hut")
         self.draw_kinds(L.trees, getattr(self, "nodes_ver", 0))
-        self.biome_draw3d(L, vl)     # biomes.py: plug-ins' own 3D props (highland ledges, rolling boulders...)
+        self.mesh_batch(True)        # the plug-ins' props: one draw call for all of them
+        try:
+            self.biome_draw3d(L, vl)     # biomes.py: plug-ins' own 3D props (highland ledges, rolling boulders...)
+        finally:
+            self.mesh_batch(False)
         if fp:
             self.fp_hide_me(False)
 

@@ -242,11 +242,16 @@ class SunShadows:
         """Everything that casts a shadow, in the same calls the frame uses (view3d.draw_world_3d)."""
         if built_geo:
             built_geo.render(self._sh_depth_prog)
-        self.biome_draw3d(L, vl, "solid")          # cliffs, bridges, ford stones (terrain_draw.py)
-        self.draw_kinds(L.bushes)
-        self.draw_kinds(L.rocks)
-        import view3d               # (its build list grows at run time - terrain_draw adds bridges)
-        self.draw_kinds(L.builds, getattr(self, "struct_ver", 0), view3d.MESH_BUILDS)
+        # (the order things go into the shadow map doesn't matter: plain props are batched into few draws)
+        self.mesh_batch(True)
+        try:
+            self.biome_draw3d(L, vl, "solid")          # cliffs, bridges, ford stones (terrain_draw.py)
+            self.draw_kinds(L.bushes)
+            self.draw_kinds(L.rocks)
+            import view3d               # (its build list grows at run time - terrain_draw adds bridges)
+            self.draw_kinds(L.builds, getattr(self, "struct_ver", 0), view3d.MESH_BUILDS)
+        finally:
+            self.mesh_batch(False)
         if self.models3d_mode(fp):
             self.hill_apply(self._sh_m3)
             self._m3_prog = self._sh_m3
@@ -256,6 +261,10 @@ class SunShadows:
             self.mesh(self.player_list, "person")
             self.mesh(L.zombies, "person")
             self.mesh(L.bosses, "boss")
-        self.mesh(L.huts, "hut")
-        self.draw_kinds(L.trees, getattr(self, "nodes_ver", 0))
-        self.biome_draw3d(L, vl)                   # highland ledges, standing stones, rolling boulders
+        self.mesh_batch(True)       # (not the creatures above: models3d changes their lists around its draws)
+        try:
+            self.mesh(L.huts, "hut")
+            self.draw_kinds(L.trees, getattr(self, "nodes_ver", 0))
+            self.biome_draw3d(L, vl)                   # highland ledges, standing stones, rolling boulders
+        finally:
+            self.mesh_batch(False)
