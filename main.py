@@ -1163,8 +1163,6 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
             self.say("BZZZ! The bees are angry - run, or swat them!", 2.5, to=p)
 
     def hit_enemy(self, z, dmg, by=None, fx=0.0, fy=0.0, w=None, element=None):
-        if isinstance(z, Boss) and getattr(z, "state", "") == "flee":
-            return                         # it's escaping into the dawn - no cheap last hits
         element = element or (w or {}).get("element")
         if element:                        # elements.py: weaknesses and resistances
             m = elements.multiplier(element, z)
