@@ -35,6 +35,7 @@ import lighting3d
 import models3d
 import shadows3d
 import shapes3d
+import sky3d
 import terrain3d
 import ui
 import water3d
@@ -356,7 +357,7 @@ void main() {
 
 
 # =========================================================================== the mixin
-class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.SunShadows):
+class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.SunShadows, sky3d.Sky3D):
     """Mixed into the game window. Replaces the flat camera with a tilted 3D one."""
 
     # ------------------------------------------------------------------ camera maths
@@ -445,7 +446,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         (ex, ey, ez), f, _, _, d, vw, vh = self._basis()
         if self.fp_on():
             from firstperson import FP_FOV_DEG
-            self.projection = Mat4.perspective_projection(vw / vh, 3.0, 9000.0, FP_FOV_DEG)
+            self.projection = Mat4.perspective_projection(vw / vh, 3.0, sky3d.FAR_FP, FP_FOV_DEG)  # far: the mountains
         else:
             self.projection = Mat4.perspective_projection(vw / vh, 20.0, 8000.0, FOV)
         self.view = Mat4.look_at(Vec3(ex, ey, ez), Vec3(ex + f[0], ey + f[1], ez + f[2]), Vec3(0.0, 0.0, 1.0))
@@ -911,6 +912,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
         self._lt_frame(L, vl, dk, sx, sy, fp)    # lighting3d.py: lights, fog, camera for this view
         self._lt.write("ground")
+        self.sky_land(vl)            # sky3d.py: the far land round the map (hills, mountains, a treeline)
 
         # ---- on the ground
         if hilly:       # HILLS: the ground is a heightfield; what lies on it is depth tested against it
@@ -1003,6 +1005,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         self.biome_draw3d(L, vl)     # biomes.py: plug-ins' own 3D props (highland ledges, rolling boulders...)
         if fp:
             self.fp_hide_me(False)
+        self.sky_dome(vl, dk)        # sky3d.py: first person sky - only where nothing was drawn
 
         # ---- build preview & tame target
         if self.state == "playing" and self.me and not self.ui_open and not self.cut:

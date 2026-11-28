@@ -14,8 +14,10 @@ like this instead, once per view (split screen does it for each player's slice i
                      added. That (plus a little of anything very bright) is blurred at quarter and eighth
                      size and added back as a soft halo. So fires, crystals and eyes bloom at night, but a
                      sunny white rock in the day doesn't turn into a blob.
-                     The same pass gives a gentle colour grade: nothing at all in plain daylight, a touch
-                     more colour and contrast as dusk and night come (darkness `dk`).
+                     The same pass gives a gentle colour grade: by day a soft painterly look (warm
+                     highlights, cool shadows, a mild contrast curve, the loudest greens calmed a little, a
+                     hint of warmth on the sun's side); a touch more colour and contrast as dusk and night
+                     come (darkness `dk`). With glow effects off there is no grade at all (the old look).
 
 The HUD, menus, weather overlay, health bars and words over heads are drawn afterwards, straight onto the
 screen, so they are never blurred or graded.
@@ -38,6 +40,7 @@ GLOW_SOFT = (0.04, 0.30)        # glow light fainter than this hardly blooms (so
 BRIGHT_KNEE = 0.86               # anything brighter than this blooms too: flames, lantern glass, sun on snow
 BRIGHT_DAY, BRIGHT_NIGHT = 0.08, 3.0   # ...hardly at all by day; at night only fires & lamps get that bright
 NEAR_K, WIDE_K = 0.6, 1.0        # mix of the tight (1/4 size) and wide (1/8 size) halo
+DAY_GRADE = 1.0                  # strength of the daytime grade on the surface (0 = none; fades out at dusk)
 
 
 # ----------------------------------------------------------------- shaders
@@ -116,12 +119,27 @@ uniform sampler2D wide;
 uniform float near_k;
 uniform float wide_k;
 uniform float grade;
+uniform float day;           // daytime grade strength (0 underground, at night and with it off)
+uniform vec3 sun_uv;         // where the sun is on screen (may be off it) and how much it faces us
 in vec2 uv;
 out vec4 f_color;
 void main() {
     vec3 c = texture(final, uv).rgb;
     vec3 halo = texture(near, uv).rgb * near_k + texture(wide, uv).rgb * wide_k;
     c = 1.0 - (1.0 - c) * exp(-halo);
+    if (day > 0.0) {
+        // painterly daylight: calm the loudest greens (a little towards olive), warm highlights and cool
+        // shadows, a mild S-curve, and a breath of warmth on the side the sun is on
+        float g = max(c.g - max(c.r, c.b), 0.0);
+        c += vec3(0.08, -0.26, 0.02) * g * day;
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        float hi = smoothstep(0.45, 0.95, l), lo = 1.0 - smoothstep(0.04, 0.45, l);
+        c += (vec3(0.030, 0.012, -0.026) * hi + vec3(-0.016, 0.000, 0.026) * lo) * day;
+        c = clamp(c, 0.0, 1.0);
+        c = mix(c, c * c * (3.0 - 2.0 * c), 0.16 * day);
+        vec2 sd = (uv - sun_uv.xy) * vec2(1.5, 1.0);
+        c += vec3(0.045, 0.022, -0.012) * exp(-dot(sd, sd) * 2.2) * sun_uv.z * day;
+    }
     if (grade > 0.0) {
         float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
         c = clamp(mix(vec3(l), c, 1.0 + 0.16 * grade), 0.0, 1.0);  // saturation (clamped: pow() hates < 0)
@@ -316,6 +334,7 @@ class Post3D:
             self._post_prev = self.ctx.active_framebuffer
             main.use()
             self._post_rect_px = x, y, w, h = self._post_rect()
+            self._post_vl = vl
             self._post_marked = False
             # the same background ui.on_draw paints under the world, plus a fresh depth buffer
             bg = (6, 6, 9) if vl != "over" else (24, 34, 22)
@@ -376,6 +395,10 @@ class Post3D:
             comp["near_k"] = NEAR_K
             comp["wide_k"] = WIDE_K
             comp["grade"] = max(0.0, min(1.0, dk))
+            over = getattr(self, "_post_vl", "over") == "over"
+            comp["day"] = DAY_GRADE * (1.0 - max(0.0, min(1.0, dk))) if over else 0.0
+            sun = getattr(self, "sky_sun_screen", None)        # sky3d.py: the sun's spot on screen
+            comp["sun_uv"] = sun(dk) if sun and over else (0.5, 2.0, 0.0)
             self.gui.use()                  # this view's viewport + scissor on the screen
             for i, tex in enumerate((t["final"][1], t["q_a"][1], t["e_a"][1])):
                 tex.use(i)
