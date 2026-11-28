@@ -1163,6 +1163,8 @@ class UI:
             else:
                 bottom = "ESC / MENU to resume       S / X: save game       Q / VIEW: save & leave to title"
             self.txt("ph2", bottom, W / 2, 40, (230, 230, 230), 13, anchor_x="center")
+            fs = "leave fullscreen" if self.fullscreen else "go fullscreen"
+            self.txt("ph3", f"F11 (Mac: Cmd+F): {fs}", W / 2, 20, (180, 180, 180), 11, anchor_x="center")
         lines = [
             ("WASD  |  L-stick", "move"), ("Mouse  |  R-stick", "aim"),
             ("Left-click  |  A / RT", "attack, chop, mine, hunt"),

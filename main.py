@@ -159,13 +159,15 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         # "Smooth edges" (MSAA, options in post3d.py): arcade asks for 4 samples and quietly skips them if the
         # driver has none. Some drivers say yes and then fail to make the window - then try again without.
         smooth = load_config().get("smooth_edges", True) is not False
+        # resizable: lets the window be maximised / sent full screen with the green button (Mac) or the
+        # maximise button (Windows). options.py scales the 1100 x 720 layout to whatever size it ends up.
         try:
-            super().__init__(W, H, SCREEN_TITLE, antialiasing=smooth)
+            super().__init__(W, H, SCREEN_TITLE, antialiasing=smooth, resizable=True)
         except Exception as e:      # noqa: BLE001 - never fail to start over an extra
             if not smooth:
                 raise
             print("Smooth edges aren't available on this computer - starting without them.", e)
-            super().__init__(W, H, SCREEN_TITLE, antialiasing=False)
+            super().__init__(W, H, SCREEN_TITLE, antialiasing=False, resizable=True)
         self.smooth_at_start = smooth     # the options screen says "after a restart" if it is changed
         self.background_color = (24, 34, 22)
         self.camera = arcade.Camera2D()
