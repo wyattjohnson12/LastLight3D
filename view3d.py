@@ -30,6 +30,7 @@ from arcade.gl import BufferDescription
 from pyglet import gl
 from pyglet.math import Mat4, Vec3
 
+import fphands3d
 import fx3d
 import lighting3d
 import models3d
@@ -1040,6 +1041,8 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         ctx.enable(ctx.DEPTH_TEST)
         self.fx_draw_particles(vl, additive=False)    # chips, dust, blood, smoke (lit like the rest)
         self.wx_draw_precip(vl)      # weather3d.py: rain / snow falling round the camera
+        if fp:
+            fphands3d.draw(self, L, vl, dk)    # fphands3d.py: your arms and what they hold (still lit, over the rain)
         ctx.disable(ctx.DEPTH_TEST)
         self._lt.write("glow")      # glows from here on: not darkened, faded out (not fogged) far away
 

@@ -150,7 +150,8 @@ class FirstPerson:
             self._fp_hidden = []
 
     def fp_draw_hand(self):
-        """Your held item in the bottom right, swinging when you attack, plus a crosshair."""
+        """A crosshair, plus (only if the 3D arms of fphands3d.py couldn't be drawn) your held item as a flat
+        picture in the bottom right, swinging when you attack."""
         me = self.me
         cx, cy = ui.W / 2, ui.H / 2
         arcade.draw_line(cx - 9, cy, cx - 3, cy, (255, 255, 255, 200), 2)
@@ -160,6 +161,9 @@ class FirstPerson:
         item = me.hotbar[me.selected]
         if not item or self.ui_open:
             return
+        import fphands3d
+        if fphands3d.drawn_this_frame(self):
+            return                 # fphands3d.py drew your arms and the item in 3D (this is the fallback)
         try:
             tex = art.icon(item)
         except Exception:

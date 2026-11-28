@@ -12,6 +12,9 @@ assets/models/<name>.glb, so the game never needs Blender. This file:
   * animates in the vertex shader by each part's ROLE (legs swing, body bobs, head nods, zombie
     arms reach and sway, tails wag, wings flap, bosses breathe, the Frost Wraith floats, a lunge
     when attacking) - nothing is rebuilt on the CPU per frame,
+  * also in the shader: survivors swing (wind up, strike with a body twist, follow through) for each
+    chop / mine / attack, timed to the held item's cooldown; everything flinches back when hurt; standing
+    creatures breathe and look about; zombies limp, hunch and sway as they lurch along,
   * knows where the attachment points (eyes, glowing cores, hands) are at any moment, so the night
     glow of zombie eyes sits on their faces and held items sit in survivors' hands.
 
@@ -32,6 +35,7 @@ from array import array
 from arcade.gl import BufferDescription
 
 import lighting3d
+from settings import ITEMS
 
 UNIT = 55.0                 # game pixels per Blender metre
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -56,9 +60,12 @@ GEAR_COL = {
 JACKETS = [(58, 104, 112), (150, 62, 58), (96, 120, 58), (176, 138, 52)]     # art.JACKETS
 HAIR = [(84, 54, 34), (40, 32, 28), (150, 96, 50), (60, 40, 30)]             # art.HAIR
 
+# how much each zombie model staggers and sways as it walks (other walking zombies: 0.4)
+STAGGER = {"walker": 1.0, "drowned": 1.0, "runner": 0.5, "brute": 0.7}
+
 TILT_UP = 1.0               # height stretch in the tilted camera (cut-outs use 1 / cos(pitch))
 VSTRIDE = 15               # x y z  nx ny nz  r g b  pivot xyz  role mat opt
-ISTRIDE = 31                # see _instance()
+ISTRIDE = 35                # see _m3_add()
 NO_ACC = (-1.0, -1.0, -1.0)
 
 
@@ -219,6 +226,12 @@ class Model:
             lit = name.startswith("eye") or name.startswith("glow")
             self.points[name] = (p, role, piv, self._glow_near(p, name.startswith("glow")) if lit else None)
         self.top = max((verts[i + 2] for i in range(0, len(verts), VSTRIDE)), default=UNIT)
+        # the upper body bends about the hips (swing twist, a flinch, a zombie's hunch): the top of the legs
+        legs = [piv[2] for role, piv in self.parts.values() if role in (2, 3)]
+        self.legs = bool(legs)
+        self.hip = max(legs) if legs else self.top * 0.4
+        self.stagger = 0.0          # zombies' uneven gait and sway (set when first drawn as a zombie)
+        self.idle_breathe = 0.012 if self.anim["breathe"] == 0 else 0.0     # a little breathing when standing
 
     def _glow_near(self, p, anywhere=False):
         """Colour of the glowing surface right at point p (eyes, cores), or None."""
@@ -257,7 +270,7 @@ def model_for(kind):
 
 
 # =========================================================================== animation (shader + Python twin)
-# The vertex shader and part_angle()/anim_point() below must do the same maths: the Python twin is
+# The vertex shader and part_rot()/anim_point() below must do the same maths: the Python twin is
 # used to find attachment points (eye glows, hands) on the moving model.
 VS = """
 #version 330
@@ -265,6 +278,7 @@ uniform WindowBlock { mat4 projection; mat4 view; } window;
 uniform vec4 a0;      // stride, bob, nod, breathe
 uniform vec4 a1;      // wag, flap, hover, float
 uniform vec4 a2;      // lunge, sway, arms (0 none 1 swing 2 reach), jaw
+uniform vec4 a3;      // stagger (zombies), hip height, -, idle breathing
 uniform float time;
 uniform float up_k;   // stretch heights (tilted camera)
 in vec3 in_pos;
@@ -281,6 +295,7 @@ in vec3 i_acc2;
 in vec3 i_acc3;
 in vec3 i_acc4;
 in vec3 i_acc5;
+in vec4 i_d;          // hurt flinch 0..1, swing 0..1 (survivors; 0 = not swinging), -, -
 out vec4 v_col;       // colour (lit in the fragment shader - lighting3d.py)
 out vec3 v_pos;       // world position
 out vec3 v_nrm;
@@ -290,6 +305,15 @@ out float v_flash;    // white hit flash
 mat3 rotY(float a) { float c = cos(a), s = sin(a); return mat3(c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c); }
 mat3 rotZ(float a) { float c = cos(a), s = sin(a); return mat3(c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0); }
 mat3 rotX(float a) { float c = cos(a), s = sin(a); return mat3(1.0, 0.0, 0.0, 0.0, c, s, 0.0, -s, c); }
+
+// A survivor's swing (chop / mine / attack), k = 0..1 through it: wind up, strike, follow through, back.
+// x = right arm angle, y = body twist, z = body lean. Mirrored by swing_curve() in Python.
+vec3 swing(float k) {
+    if (k <= 0.0) return vec3(0.0);
+    float up = smoothstep(0.0, 0.3, k), down = smoothstep(0.3, 0.52, k), back = 1.0 - smoothstep(0.65, 1.0, k);
+    return vec3(mix(mix(0.0, -2.7, up), -0.55, down), mix(mix(0.0, -0.45, up), 0.35, down),
+                0.18 * down - 0.06 * up * (1.0 - down)) * back;
+}
 
 void main() {
     int opt = int(in_info.z + 0.5) - 1;
@@ -301,13 +325,20 @@ void main() {
     int role = int(in_info.x + 0.5);
     float ph = i_b.y * 6.2831853;
     float mv = i_b.z, at = i_b.w, seed = i_c.y;
+    float stg = a3.x, fl = i_d.x;
+    ph += stg * 0.55 * sin(ph);     // zombies limp: one step quick, the next dragged
+    vec3 swg = swing(i_d.y);
     float sw = sin(ph);
     mat3 R = mat3(1.0);
     if (role == 2) R = rotY(a0.x * mv * sw);
     else if (role == 3) R = rotY(-a0.x * mv * sw);
     else if (role == 9) R = rotZ(a0.x * 0.6 * mv * sw);
     else if (role == 10) R = rotZ(-a0.x * 0.6 * mv * sw);
-    else if (role == 1) R = rotY(a0.z * (mv * sin(ph * 2.0) + 0.35 * sin(time * 1.3 + seed)) + 0.3 * at);
+    else if (role == 1) {           // nod, plus looking about now and then when standing (zombies loll)
+        float look = (1.0 - mv) * 0.3 * sin(time * 0.41 + seed * 2.3) * sin(time * 0.17 + seed);
+        R = rotZ(look) * rotX(stg * 0.2 * sin(time * 0.7 + seed) + 0.25 * fl * sin(seed * 5.0))
+            * rotY(a0.z * (mv * sin(ph * 2.0) + 0.35 * sin(time * 1.3 + seed)) + 0.3 * at - 0.35 * fl);
+    }
     else if (role == 6) R = rotZ(a1.x * sin(time * (3.0 + 7.0 * mv) + seed));
     else if (role == 7) R = rotX(-a1.y * 0.7 * sin(time * 38.0 + seed));
     else if (role == 8) R = rotX(a1.y * 0.7 * sin(time * 38.0 + seed));
@@ -317,18 +348,28 @@ void main() {
         float a;
         if (a2.z > 1.5) a = a2.y * sin(ph + side * 1.2) * (0.3 + mv) * 0.6 - 0.7 * at
                             + 0.04 * sin(time * 1.7 + seed + side);
-        else if (a2.z > 0.5) a = -a0.x * 0.8 * mv * sw * side - (role == 5 ? 1.9 * at : 0.0);
+        else if (a2.z > 0.5) a = -a0.x * 0.8 * mv * sw * side
+                                 - (role == 5 ? (i_d.y > 0.0 ? -swg.x : 1.9 * at) : 0.5 * sin(3.14159 * i_d.y));
         else a = 0.08 * sin(time * 1.5 + seed + side) - 0.5 * at;
         R = rotY(a);
     }
     vec3 p = in_piv + R * (in_pos - in_piv);
     vec3 n = R * in_nrm;
+    if (role != 2 && role != 3 && role != 9 && role != 10 && role != 12) {
+        // the upper body about the hips: swing twist, flinching back when hurt, zombies' hunch and sway
+        float lean = swg.z - 0.32 * fl + stg * (0.06 + 0.14 * mv + 0.06 * mv * sin(ph * 2.0));
+        float roll = stg * (0.13 * sin(ph) * (0.35 + mv) + 0.05 * sin(time * 0.8 + seed)) + 0.1 * fl * sin(seed * 7.0);
+        mat3 B = rotZ(swg.y) * rotY(lean) * rotX(roll);
+        vec3 hip = vec3(0.0, 0.0, a3.y);
+        p = hip + B * (p - hip);
+        n = B * n;
+    }
     if (role != 12) {
-        float br = a0.w * sin(time * 2.0 + seed);
+        float br = (a0.w + a3.w * (1.0 - mv)) * sin(time * 2.0 + seed);
         p.xy *= 1.0 + br;
         p.z *= 1.0 + br * 0.6;
         p.z += a0.y * mv * abs(sw) + a1.z + a1.w * sin(time * 2.2 + seed);
-        p.x += a2.x * at;
+        p.x += a2.x * at - 4.0 * fl;
     }
     float s = i_b.x;
     mat3 H = rotZ(i_a.w);
@@ -385,59 +426,113 @@ void main() {
 """
 
 
-def part_angle(role, A, arms, ph, mv, at, t, seed):
-    """(axis, angle) the shader turns a part of this role by. Mirrors VS above."""
+def _rx(a):
+    c, s = math.cos(a), math.sin(a)
+    return ((1.0, 0.0, 0.0), (0.0, c, -s), (0.0, s, c))
+
+
+def _ry(a):
+    c, s = math.cos(a), math.sin(a)
+    return ((c, 0.0, s), (0.0, 1.0, 0.0), (-s, 0.0, c))
+
+
+def _rz(a):
+    c, s = math.cos(a), math.sin(a)
+    return ((c, -s, 0.0), (s, c, 0.0), (0.0, 0.0, 1.0))
+
+
+def _mm(a, b):
+    return tuple(tuple(a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j] for j in range(3)) for i in range(3))
+
+
+def _mv(m, v):
+    return (m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2], m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+            m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2])
+
+
+def _smooth(e0, e1, x):
+    k = max(0.0, min(1.0, (x - e0) / (e1 - e0)))
+    return k * k * (3 - 2 * k)
+
+
+def swing_curve(k):
+    """A survivor's swing, k = 0..1 through it: (right arm angle, body twist, body lean). Mirrors swing() in VS."""
+    if k <= 0:
+        return 0.0, 0.0, 0.0
+    up, down, back = _smooth(0.0, 0.3, k), _smooth(0.3, 0.52, k), 1.0 - _smooth(0.65, 1.0, k)
+    arm = (0.0 + (-2.7 - 0.0) * up) * (1 - down) + -0.55 * down
+    twist = (-0.45 * up) * (1 - down) + 0.35 * down
+    lean = 0.18 * down - 0.06 * up * (1 - down)
+    return arm * back, twist * back, lean * back
+
+
+def part_rot(role, A, arms, ph, mv, at, t, seed, stg=0.0, fl=0.0, k=0.0):
+    """The rotation (3 x 3 rows) the shader turns a part of this role by about its pivot, or None.
+    Mirrors VS above (ph already has the zombies' limp in it)."""
     sw = math.sin(ph)
     if role == 2:
-        return "y", A["stride"] * mv * sw
+        return _ry(A["stride"] * mv * sw)
     if role == 3:
-        return "y", -A["stride"] * mv * sw
+        return _ry(-A["stride"] * mv * sw)
     if role == 9:
-        return "z", A["stride"] * 0.6 * mv * sw
+        return _rz(A["stride"] * 0.6 * mv * sw)
     if role == 10:
-        return "z", -A["stride"] * 0.6 * mv * sw
+        return _rz(-A["stride"] * 0.6 * mv * sw)
     if role == 1:
-        return "y", A["nod"] * (mv * math.sin(ph * 2) + 0.35 * math.sin(t * 1.3 + seed)) + 0.3 * at
+        look = (1 - mv) * 0.3 * math.sin(t * 0.41 + seed * 2.3) * math.sin(t * 0.17 + seed)
+        return _mm(_mm(_rz(look), _rx(stg * 0.2 * math.sin(t * 0.7 + seed) + 0.25 * fl * math.sin(seed * 5.0))),
+                   _ry(A["nod"] * (mv * math.sin(ph * 2) + 0.35 * math.sin(t * 1.3 + seed)) + 0.3 * at - 0.35 * fl))
     if role == 6:
-        return "z", A["wag"] * math.sin(t * (3 + 7 * mv) + seed)
+        return _rz(A["wag"] * math.sin(t * (3 + 7 * mv) + seed))
     if role == 11:
-        return "y", A["jaw"] * at + 0.05 * (1 + math.sin(t * 2 + seed))
+        return _ry(A["jaw"] * at + 0.05 * (1 + math.sin(t * 2 + seed)))
     if role in (4, 5):
         side = 1.0 if role == 4 else -1.0
         if arms == 2:
             a = A["sway"] * math.sin(ph + side * 1.2) * (0.3 + mv) * 0.6 - 0.7 * at + 0.04 * math.sin(
                 t * 1.7 + seed + side)
         elif arms == 1:
-            a = -A["stride"] * 0.8 * mv * sw * side - (1.9 * at if role == 5 else 0.0)
+            if role == 5:
+                extra = -swing_curve(k)[0] if k > 0 else 1.9 * at
+            else:
+                extra = 0.5 * math.sin(math.pi * k)
+            a = -A["stride"] * 0.8 * mv * sw * side - extra
         else:
             a = 0.08 * math.sin(t * 1.5 + seed + side) - 0.5 * at
-        return "y", a
-    return None, 0.0
+        return _ry(a)
+    return None
 
 
 def anim_point(model, point, inst, t, up_k=1.0):
     """World position of attachment `point` on a model drawn with instance tuple `inst`
-    (x, y, z, heading, scale, phase, move, attack, seed)."""
-    x, y, z, hd, sc, phase, mv, at, seed = inst
+    (x, y, z, heading, scale, phase, move, attack, seed[, flinch, swing])."""
+    x, y, z, hd, sc, phase, mv, at, seed = inst[:9]
+    fl, k = (inst[9], inst[10]) if len(inst) > 10 else (0.0, 0.0)
+    stg = model.stagger
     p, role, piv, _ = model.points[point]
     ph = phase * math.tau
-    axis, a = part_angle(role, model.anim, model.arms, ph, mv, at, t, seed)
-    px, py, pz = p[0] - piv[0], p[1] - piv[1], p[2] - piv[2]
-    if axis:
-        c, s = math.cos(a), math.sin(a)
-        if axis == "y":
-            px, pz = c * px + s * pz, -s * px + c * pz
-        elif axis == "z":
-            px, py = c * px - s * py, s * px + c * py
-    px, py, pz = px + piv[0], py + piv[1], pz + piv[2]
+    ph += stg * 0.55 * math.sin(ph)
+    R = part_rot(role, model.anim, model.arms, ph, mv, at, t, seed, stg, fl, k)
+    q = (p[0] - piv[0], p[1] - piv[1], p[2] - piv[2])
+    if R is not None:
+        q = _mv(R, q)
+    px, py, pz = q[0] + piv[0], q[1] + piv[1], q[2] + piv[2]
     A = model.anim
+    if role not in (2, 3, 9, 10, 12):
+        _, twist, lean = swing_curve(k)
+        lean += -0.32 * fl + stg * (0.06 + 0.14 * mv + 0.06 * mv * math.sin(ph * 2))
+        roll = stg * (0.13 * math.sin(ph) * (0.35 + mv) + 0.05 * math.sin(t * 0.8 + seed)) + 0.1 * fl * math.sin(seed * 7)
+        B = _mm(_mm(_rz(twist), _ry(lean)), _rx(roll))
+        hz = model.hip
+        px, py, pz = _mv(B, (px, py, pz - hz))
+        pz += hz
     if role != 12:
-        br = A["breathe"] * math.sin(t * 2 + seed)
+        br = (A["breathe"] + model.idle_breathe * (1 - mv)) * math.sin(t * 2 + seed)
         px *= 1 + br
         py *= 1 + br
         pz *= 1 + br * 0.6
         pz += A["bob"] * UNIT * mv * abs(math.sin(ph)) + A["hover"] * UNIT + A["float"] * UNIT * math.sin(t * 2.2 + seed)
-        px += A["lunge"] * UNIT * at
+        px += A["lunge"] * UNIT * at - 4.0 * fl
     c, s = math.cos(hd), math.sin(hd)
     return x + (c * px - s * py) * sc, y + (s * px + c * py) * sc, (z + pz * sc) * up_k
 
@@ -497,20 +592,35 @@ class CreatureModels:
             ibo = ctx.buffer(reserve=cap * ISTRIDE * 4)
             geo = ctx.geometry([
                 BufferDescription(vbo, "3f 3f 3f 3f 3f", ["in_pos", "in_nrm", "in_col", "in_piv", "in_info"]),
-                BufferDescription(ibo, "4f 4f 4f 4f 3f 3f 3f 3f 3f",
-                                  ["i_a", "i_b", "i_tint", "i_c", "i_acc1", "i_acc2", "i_acc3", "i_acc4", "i_acc5"],
+                BufferDescription(ibo, "4f 4f 4f 4f 3f 3f 3f 3f 3f 4f",
+                                  ["i_a", "i_b", "i_tint", "i_c", "i_acc1", "i_acc2", "i_acc3", "i_acc4", "i_acc5",
+                                   "i_d"],
                                   instanced=True)], mode=ctx.TRIANGLES)
             g = self._m3_gpu[m.name] = [geo, ibo, cap, vbo]
         return g
 
     # ------------------------------------------------------------------ per creature state
-    def _m3_motion(self, obj, x, y, m, scale):
-        """Walk phase (by distance moved) and a smoothed 'moving' amount, once per game frame."""
+    def _m3_motion(self, obj, x, y, m, scale, hurt=0.0, health=None, swing=None, swing_len=0.4):
+        """Walk phase (by distance moved) and a smoothed 'moving' amount, once per game frame. Also:
+        hurt  - anything that goes up when it's hit (hit flash, survivor's hurt timer): a flinch starts,
+        health - survivors: a drop in health starts a flinch too (online clients only see health),
+        swing - a survivor's swing timer (Survivor.swing jumps up on each attack): a swing animation starts
+                that lasts swing_len seconds."""
         t = self.flame_t
         st = obj.__dict__.get("_m3")
         if st is None:
-            st = obj.__dict__["_m3"] = [x, y, t, (id(obj) % 997) / 997.0, 0.0, None, 0.0, (id(obj) % 631) * 0.1]
+            st = obj.__dict__["_m3"] = [x, y, t, (id(obj) % 997) / 997.0, 0.0, None, 0.0, (id(obj) % 631) * 0.1,
+                                        0.0, hurt, -1.0, swing_len, swing or 0.0, health]
         if st[2] != t:
+            dt0 = max(0.0, t - st[2])
+            st[8] = max(0.0, st[8] - dt0 * 4.0)       # the flinch eases off (~1/4 s)
+            if hurt > st[9] + 0.01 or (health is not None and st[13] is not None and health < st[13] - 1.5):
+                st[8] = 1.0
+            st[9], st[13] = hurt, health
+            if swing is not None:
+                if swing > st[12] + 0.05:
+                    st[10], st[11] = t, swing_len
+                st[12] = swing
             dt = max(1e-4, t - st[2])
             d = math.hypot(x - st[0], y - st[1])
             if d > 120:           # teleported / respawned
@@ -537,13 +647,17 @@ class CreatureModels:
         return st[6]
 
     def _m3_add(self, kind, obj, x, y, heading, scale, color, alpha, flash=0.0, flags=0, acc=None, attack_cd=None,
-                near=False, z=0.0, extra_attack=0.0):
+                near=False, z=0.0, extra_attack=0.0, hurt=0.0, health=None, swing=None, swing_len=0.4, flinch_k=1.0):
         m = model_for(kind)
         if m is None:
             return None
-        st = self._m3_motion(obj, x, y, m, scale)
+        st = self._m3_motion(obj, x, y, m, scale, hurt, health, swing, swing_len)
         at = max(self._m3_attack(st, obj, attack_cd, near), extra_attack)
-        inst = (x, y, z, heading, scale, st[3], st[4], at, st[7])
+        f = st[8]
+        fl = f * f * (3 - 2 * f) * flinch_k
+        k = (self.flame_t - st[10]) / st[11] if st[10] >= 0 else 1.0
+        k = k if 0.0 <= k < 1.0 else 0.0
+        inst = (x, y, z, heading, scale, st[3], st[4], at, st[7], fl, k)
         r, g, b = color[:3]
         a = (alpha if alpha is not None else 255) / 255
         acc = list(acc or ())
@@ -552,6 +666,7 @@ class CreatureModels:
                float(flags), st[7], 0.0, flash]
         for c in acc:
             row.extend(c if c[0] < 0 else (c[0] / 255, c[1] / 255, c[2] / 255))
+        row.extend((fl, k, 0.0, 0.0))
         self._m3_frame.setdefault(m.name, []).extend(row)
         for name, (_, _, _, gcol) in m.points.items():
             if gcol is not None and (name.startswith("eye") or name.startswith("glow")):
@@ -586,14 +701,17 @@ class CreatureModels:
                 acc = [GEAR_COL.get(a.armor, (150, 150, 150))]
             if self._m3_add(a.kind, a, a.center_x, a.center_y, a.heading, a.scale_x, a.color, a.alpha,
                             0.5 if a.flash > 0 else 0.0, flags, acc, getattr(a, "attack_cd", None),
-                            touching(a, 34) if players else False):
+                            touching(a, 34) if players else False, hurt=float(a.flash > 0)):
                 done.add(id(a))
         for zb in L.zombies:
             if not zb.visible:
                 continue
+            m = model_for(zb.kind)
+            if m is not None and not m.stagger and m.arms == 2 and m.legs:
+                m.stagger = STAGGER.get(m.name, 0.4)       # walking dead stagger and lurch
             if self._m3_add(zb.kind, zb, zb.center_x, zb.center_y, zb.heading, zb.scale_x, zb.color, zb.alpha,
                             0.5 if zb.flash > 0 else 0.0, 0, None, zb.attack_cd,
-                            touching(zb, zb.radius + near_r) if players else False):
+                            touching(zb, zb.radius + near_r) if players else False, hurt=float(zb.flash > 0)):
                 done.add(id(zb))
         for b in L.bosses:
             if not b.visible:
@@ -601,7 +719,8 @@ class CreatureModels:
             st_k = {"windup": 0.7, "charge": 1.0}.get(getattr(b, "state", ""), 0.0)
             if self._m3_add(b.kind, b, b.center_x, b.center_y, b.heading, b.scale_x, b.color, b.alpha,
                             0.5 if b.flash > 0 else 0.0, 0, None, b.attack_cd,
-                            touching(b, b.radius + near_r) if players else False, extra_attack=st_k):
+                            touching(b, b.radius + near_r) if players else False, extra_attack=st_k,
+                            hurt=float(b.flash > 0), flinch_k=0.45):
                 done.add(id(b))
         for p in self.players.values():
             s = p.sprite
@@ -617,8 +736,15 @@ class CreatureModels:
                     acc[i] = GEAR_COL.get(it, (150, 150, 150))
             sw = min(1.0, p.swing / 0.2) if getattr(p, "swing", 0) > 0 else 0.0
             col = (255, 140, 140) if getattr(p, "hurt", 0) > 0 else s.color
+            # a chop / mine / attack swing timed to the held item's cooldown (online clients know what
+            # everyone holds); bows keep the old "arm up to aim"
+            item = p.hotbar[p.selected] if 0 <= p.selected < len(p.hotbar) else None
+            info = ITEMS.get(item or "", {})
+            ranged = bool(info.get("ranged"))
             got = self._m3_add("survivor", s, s.center_x, s.center_y, p.face, 1.0, col, s.alpha, 0.0, flags, acc,
-                               extra_attack=sw)
+                               extra_attack=sw if ranged else 0.0, hurt=getattr(p, "hurt", 0.0),
+                               health=getattr(p, "health", None), swing=None if ranged else getattr(p, "swing", 0.0),
+                               swing_len=max(0.26, min(0.62, info.get("cooldown", 0.45) * 0.95)))
             if got:
                 done.add(id(s))
                 self._m3_hands.append((p, got))
@@ -647,6 +773,7 @@ class CreatureModels:
             prog["a0"] = (A["stride"], A["bob"] * UNIT, A["nod"], A["breathe"])
             prog["a1"] = (A["wag"], A["flap"], A["hover"] * UNIT, A["float"] * UNIT)
             prog["a2"] = (A["lunge"] * UNIT, A["sway"], float(m.arms), A["jaw"])
+            prog["a3"] = (m.stagger, m.hip, 0.0, m.idle_breathe)
             geo.render(prog, instances=n)
 
     def models3d_held(self, stand):
