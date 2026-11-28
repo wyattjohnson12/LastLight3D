@@ -879,7 +879,9 @@ class UI:
                     f"Sun shadows:  {self.shadows_mode().capitalize()}",
                     f"Ambient occlusion:  {onoff(self.ao_wanted())}"
                     + ("" if self.post_wanted() else "   (needs Glow effects)"),
-                    f"Rain & snow:  {'Light' if self.wx_light() else 'Full'}", "Back"]
+                    f"Rain & snow:  {'Light' if self.wx_light() else 'Full'}",
+                    f"3D grass & ground detail:  {self.grass_mode().capitalize()}", "Back"]
+
         if self.menu == "local":
             return []
         if self.menu == "diff":
@@ -999,6 +1001,8 @@ class UI:
                 self.toggle_ao()                # ao3d.py
             elif i == 5:
                 self.toggle_weather_drops()     # weather3d.py
+            elif i == 6:
+                self.toggle_grass()         # grass3d.py
             else:
                 self.menu_back()
         elif self.menu == "diff":
@@ -1152,8 +1156,8 @@ class UI:
         elif self.menu == "gfx":
             self.txt("t6", "Smooth edges: no jagged edges (restart to change).   Glow: fires, crystals and eyes "
                      "shine at night.", W / 2, 46, (160, 160, 160), 11, anchor_x="center")
-            self.txt("t7", "Sun shadows: real shadows by day.   Ambient occlusion: soft shade in corners and under "
-                     "things.   Slow game? Turn things off, or to Low / Light.", W / 2, 28, (160, 160, 160), 11,
+            self.txt("t7", "Sun shadows: real shadows by day.   Ambient occlusion: soft shade in corners.   Slow game? "
+                     "Turn things off, or shadows / grass to Low and rain to Light.", W / 2, 28, (160, 160, 160), 11,
                      anchor_x="center")
         elif self.menu == "confirm":
             self.txt("t6", "ESC / B = keep it", W / 2, 46, (160, 160, 160), 11, anchor_x="center")

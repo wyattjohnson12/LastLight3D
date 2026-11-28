@@ -31,7 +31,9 @@ from pyglet import gl
 from pyglet.math import Mat4, Vec3
 
 import fphands3d
+import ambient3d
 import fx3d
+import grass3d
 import lighting3d
 import models3d
 import shadows3d
@@ -359,7 +361,8 @@ void main() {
 
 
 # =========================================================================== the mixin
-class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.SunShadows, sky3d.Sky3D):
+class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.SunShadows, sky3d.Sky3D,
+             grass3d.Grass3D, ambient3d.AmbientLife):
     """Mixed into the game window. Replaces the flat camera with a tilted 3D one."""
 
     # ------------------------------------------------------------------ camera maths
@@ -894,6 +897,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         cave_geo = self._cave_walls(L) if vl != "over" else None   # any underground layer
         built_geo = self._built_walls(L)
         self.fx_tick()               # fx3d.py: particles move once per frame (not once per split view)
+        self.amb_tick(vl)            # ambient3d.py: leaves, fireflies, motes, birds around the viewer
         self._m3_init()
         hilly = self.hill_bind(vl)   # HILLS (terrain3d.py): the height texture, or flat for this layer
         dk = self.layer_dark(vl) if vl != "over" else self.darkness   # biomes.LAYER_INFO
@@ -920,10 +924,10 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         if hilly:       # HILLS: the ground is a heightfield; what lies on it is depth tested against it
             ctx.enable(ctx.DEPTH_TEST)
             gl.glDepthFunc(gl.GL_LEQUAL)
-            self.draw_hill_ground(L.ground, (sx, sy))
+            self.draw_hill_ground(L.ground, (sx, sy), vl)
             gl.glDepthMask(gl.GL_FALSE)
-        else:
-            self.flat(L.ground)
+        else:           # flat (old worlds, underground): the same ground program with the hills off
+            self.draw_hill_ground(L.ground, (sx, sy), vl)
         if vl == "over":
             water3d.draw_bog(self, getattr(self, "swamp_pool_list", None))    # water3d.py: the Mire's pools
         self.flat(L.decor)
@@ -947,6 +951,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         else:
             self.draw_ground_hazards()
         self.drop_shadows(L, fp, shade)
+        self.grass_draw(L, vl, fp, hilly)      # grass3d.py: 3D grass blades around the camera
         if hilly:
             gl.glDepthMask(gl.GL_TRUE)
             ctx.disable(ctx.DEPTH_TEST)
@@ -1040,6 +1045,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
                 self.ground_ring(t.center_x, t.center_y, 30, (255, 150, 190, 200), 2, lit=True)
         ctx.enable(ctx.DEPTH_TEST)
         self.fx_draw_particles(vl, additive=False)    # chips, dust, blood, smoke (lit like the rest)
+        self.amb_draw(vl, glow=False)                 # ambient3d.py: leaves, flakes, butterflies, birds
         self.wx_draw_precip(vl)      # weather3d.py: rain / snow falling round the camera
         if fp:
             fphands3d.draw(self, L, vl, dk)    # fphands3d.py: your arms and what they hold (still lit, over the rain)
@@ -1090,6 +1096,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         ctx.enable(ctx.DEPTH_TEST)
         self.fx_draw_particles(vl, additive=True)
         self.wx_draw_bolt(vl)        # weather3d.py: first person - the lightning bolt in the sky
+        self.amb_draw(vl, glow=True)                  # ambient3d.py: fireflies, motes, embers, glitter
         ctx.disable(ctx.DEPTH_TEST)
         self.gui.use()
         self.post_end(dk)            # post3d.py: bloom + colour grade onto the screen (HUD etc. come after)
