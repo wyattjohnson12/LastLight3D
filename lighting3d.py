@@ -11,6 +11,9 @@ What every world shader gets (inject() pastes the GLSL in, like terrain3d.inject
     trunks around it, not just the ground under them.
   * A soft rim light (moonlight at night) so creature silhouettes still read in the dark.
   * Distance fog: from the biome's haze, foggy weather and the time of day (see View3D._lt_frame).
+  * Weather on surfaces (weather3d.py fills lt_wx): lt_weather(colour, p, n, ground) makes wet things darker
+    and glossy with puddles on the ground, snow whiten the tops of things, lightning light everything up;
+    lt_rain_normal adds rain rings to water.
 
 How this fits with fx3d's light map (the half-resolution "multiply" over the frame):
   The light map is a screen-space picture of light pools lying ON THE GROUND. That's exactly right for
@@ -68,6 +71,8 @@ layout (std140) uniform LightBlock {
     vec4 lt_fogk;       // start distance, 1 / length, most fog, 0
     vec4 lt_pos[%N%];   // point lights: x, y, z, reach
     vec4 lt_col[%N%];   // colour * strength, wrap (0 = facing matters, 1 = lights all round)
+    vec4 lt_wx;         // weather3d.py: wetness, snow cover, lightning flash, time (seconds)
+    vec4 lt_wx2;        // weather3d.py: rain on surfaces now (0..1), 0, 0, 0
 };
 vec3 lt_hemi(vec3 n) {
     return mix(lt_gnd.rgb, lt_sky.rgb, 0.5 + 0.5 * n.z);
@@ -170,6 +175,91 @@ float lt_sunlit(vec3 p, vec3 n) {
 """
 
 
+# Weather on surfaces (weather3d.py fills lt_wx / lt_wx2). Shaders call lt_weather on a surface's own colour,
+# before it is lit, so the night, the fires and the shadows still work on wet or snowy ground:
+#   * wet  - soaked surfaces get darker, and the ones facing up get a glossy sheen of the sky and a glint of
+#            the sun (lit later like everything else, so at night only fires make it shine). On the ground
+#            (ground = 1) puddles gather in patches as the wetness rises: almost a mirror of the sky, with rings
+#            where the rain hits them.
+#   * snow - faces turned up (normal.z) slowly go white in soft drifts; slopes and sides stay bare.
+#   * flash - lightning: everything lights up for a moment (the sides facing the sky most).
+# lt_rain_normal adds the same rain rings to water (water3d.py).
+WEATHER_FRAG = """
+float lt_hash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+float lt_vnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(lt_hash(i), lt_hash(i + vec2(1.0, 0.0)), f.x),
+               mix(lt_hash(i + vec2(0.0, 1.0)), lt_hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+// the slope rain drops give still water: little rings spreading out and fading, two offset grids of them
+vec2 lt_rain_rings(vec2 p) {
+    float rain = lt_wx2.x;
+    if (rain <= 0.0) return vec2(0.0);
+    vec2 acc = vec2(0.0);
+    for (int k = 0; k < 2; k++) {
+        vec2 q = p / 22.0 + vec2(float(k) * 0.5, float(k) * 0.37);
+        vec2 cell = floor(q);
+        float h = lt_hash(cell + float(k) * 19.0);
+        if (h > rain) continue;                        // light rain: fewer rings
+        vec2 c = vec2(lt_hash(cell + 3.1), lt_hash(cell + 7.7)) * 0.5 + 0.25;
+        float life = fract(lt_wx.w * 1.1 + h * 7.0);   // 0 -> 1 as the ring spreads
+        vec2 d = fract(q) - c;
+        float r = length(d);
+        float x = (r - life * 0.4) * 30.0;
+        float ring = sin(x) * smoothstep(1.6, 0.0, abs(x)) * (1.0 - life);
+        acc += d / max(r, 1e-3) * ring;
+    }
+    return acc * 0.55;
+}
+vec3 lt_rain_normal(vec3 n, vec2 p) {
+    if (lt_wx2.x <= 0.0) return n;
+    return normalize(n + vec3(lt_rain_rings(p) * 2.6, 0.0));
+}
+// a surface's colour (before lighting) on wet / snowy days. n = its normal; ground = 1 for the ground and
+// what lies flat on it (puddles), 0 for anything else
+vec3 lt_weather(vec3 alb, vec3 p, vec3 n, float ground) {
+    float wet = lt_wx.x, snow = lt_wx.y, flash = lt_wx.z;
+    if (wet + snow + flash <= 0.001) return alb;
+    float up = clamp(n.z, 0.0, 1.0);
+    if (snow > 0.001) {
+        // drifts: patchy at first, closing up as it keeps snowing; only on faces that look up
+        float drift = lt_vnoise(p.xy / 95.0) * 0.55 + lt_vnoise(p.xy / 21.0) * 0.3 + lt_vnoise(p.xy / 6.0) * 0.15;
+        float cover = smoothstep(0.55, 0.85, up) * smoothstep(0.0, 0.18, snow * 1.25 - drift);
+        vec3 white = vec3(0.90, 0.93, 0.98) * (0.93 + 0.07 * lt_vnoise(p.xy / 3.0));
+        alb = mix(alb, white, cover);
+        wet *= 1.0 - cover;
+    }
+    if (wet > 0.001) {
+        // puddles: low, flat spots of the ground fill as the wetness rises
+        float pud = 0.0;
+        if (ground > 0.5 && up > 0.9) {
+            float lowk = lt_vnoise(p.xy / 150.0) * 0.65 + lt_vnoise(p.xy / 41.0) * 0.35;
+            pud = smoothstep(0.72, 0.75, lowk + wet * 0.05) * smoothstep(0.4, 0.9, wet);
+        }
+        float rain = lt_wx2.x;
+        vec3 dark = alb * mix(1.0, 0.6, wet * (0.45 + 0.55 * up));        // soaked: darker
+        vec3 nn = pud > 0.0 ? normalize(n + vec3(lt_rain_rings(p.xy) * 1.6, 0.0)) : n;
+        vec3 v = normalize(lt_eye.xyz - p);
+        vec3 r = reflect(-v, nn);
+        float fres = 0.1 + 0.9 * pow(1.0 - max(dot(nn, v), 0.0), 3.0);
+        // the sky it mirrors: grey cloud while it rains, blue once it clears
+        vec3 sky = mix(vec3(0.40, 0.52, 0.68), vec3(0.44, 0.47, 0.52), min(1.0, rain * 1.5));
+        sky *= 0.75 + 0.25 * smoothstep(-0.1, 0.7, r.z);
+        float sheen = wet * up * fres * 0.4;
+        float spec = pow(max(dot(r, lt_sun.xyz), 0.0), 90.0) * wet * up * (1.0 - min(1.0, rain * 1.5)) * (0.25 + 0.5 * pud);
+        alb = mix(dark, mix(dark * 0.5, sky, 0.3 + 0.4 * fres), pud);     // a puddle: a dull mirror of the sky
+        alb += sky * sheen + vec3(1.0, 0.97, 0.9) * spec;
+    }
+    return alb * (1.0 + flash * (0.7 + 0.8 * up));
+}
+"""
+
+
 def _allow_shadow_samplers():
     """arcade's shader uniform table doesn't know shadow samplers (sampler2DShadow) and refuses to build a
     program with one. It's set exactly like any other sampler (a texture unit number), so teach it that."""
@@ -187,7 +277,7 @@ _allow_shadow_samplers()
 
 def glsl(frag=False):
     src = GLSL.replace("%N%", str(MAX_LIGHTS))
-    return src + FRAG if frag else src
+    return src + FRAG + WEATHER_FRAG if frag else src
 
 
 def inject(src, frag=False):
@@ -210,7 +300,7 @@ def bind(prog):
 
 
 # ----------------------------------------------------------------- the buffer
-FLOATS = 32 + 4 * 11 + 8 * MAX_LIGHTS
+FLOATS = 32 + 4 * 11 + 8 * MAX_LIGHTS + 8      # (+ 8: lt_wx, lt_wx2 at the very end)
 
 
 class LightState:
@@ -231,6 +321,8 @@ class LightState:
         self.lights = []            # [(x, y, z, reach, r, g, b, wrap)]
         self.shm = self.inv         # world -> shadow map (shadows3d.py)
         self.shk = (0.0, 1.0, 0.0, 9.0)   # shadow darkness (0 = none), texel size, 1 / depth range, taps
+        self.wx = (0.0, 0.0, 0.0, 0.0)    # weather3d.py: wetness, snow cover, flash, time
+        self.wx2 = (0.0, 0.0, 0.0, 0.0)   # weather3d.py: rain now
 
     def write(self, stage):
         """Upload for one stage of the frame: "ground", "lit" or "glow" (see the module docstring)."""
@@ -253,6 +345,9 @@ class LightState:
                 x, y, z, reach, r, g, b, w = self.lights[k]
                 d[i + 4 * k:i + 4 * k + 4] = array("f", (x, y, z, reach))
                 d[i + 4 * MAX_LIGHTS + 4 * k:i + 4 * MAX_LIGHTS + 4 * k + 4] = array("f", (r, g, b, w))
+        # weather (weather3d.py): the glows aren't surfaces - no wet, snow or flash on them
+        wx = self.wx if stage != "glow" else (0.0, 0.0, 0.0, self.wx[3])
+        d[FLOATS - 8:FLOATS] = array("f", tuple(wx) + tuple(self.wx2))
         self.buf.write(d)
         self.buf.bind_to_uniform_block(BINDING)
 

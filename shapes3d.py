@@ -269,6 +269,7 @@ void main() {
         rgb = lt_fogged(rgb * gs_shade, p);
     } else {
         vec3 n = lt_face(p);
+        rgb = lt_weather(rgb, p, n, 0.0);               // wet in the rain, white tops in the snow (weather3d.py)
         float sun = gs_shade * lt_sunlit(p, n);         // in the shadow of something else (shadows3d.py)
         rgb = rgb * sun * lt_hemi(n) * lt_light(p, n) + 0.5 * lt_rimlight(p, n) * (0.3 + rgb);
         rgb = lt_fogged(rgb, p);

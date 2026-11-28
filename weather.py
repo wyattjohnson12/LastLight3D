@@ -14,7 +14,6 @@ Spring brings more animals, winter fewer; berry bushes regrow slowly in winter.
 The host (or solo player) decides the weather; co-op clients get it in the snapshots ("wx").
 The season comes from the day number, which is already synced and saved.
 """
-import math
 import random
 
 import arcade
@@ -48,7 +47,6 @@ WEATHER_HELLO = {
     "snow": "It's snowing. Bundle up and stay near a fire.",
     "fog": "A thick fog creeps in...",
 }
-DROPS = {"rain": 260, "storm": 420, "snow": 190}
 
 
 class Weather:
@@ -63,8 +61,8 @@ class Weather:
         self.weather_flash = 0.0      # lightning
         self.weather_bolt_t = 6.0
         self.weather_said = -99.0
-        self.weather_drops = []
-        self.weather_cam = None
+        self.wx_wet = 0.0             # weather3d.py: how wet the ground is / how much snow lies (looks only)
+        self.wx_snow = 0.0
 
     @property
     def season(self):
@@ -177,6 +175,8 @@ class Weather:
         self.weather_t = float(data.get("t", random.uniform(*CLEAR_SECONDS)))
         self.season_seen = self.season
         self.weather_shown, self.weather_k = self.weather, 1.0 if self.weather != "clear" else 0.0
+        self.wx_wet = 1.0 if self.wet else 0.0                      # weather3d.py: start soaked / snowed on
+        self.wx_snow = 1.0 if self.weather == "snow" else 0.0
 
     # ------------------------------------------------------------------ looks
     def _weather_visuals(self, dt):
@@ -200,50 +200,11 @@ class Weather:
                 if self.view_layer == "over":
                     self._play("boom", 0.12, speed=0.6)
 
-        kind = self.weather_shown
-        want = DROPS.get(kind, 0)
-        drops = self.weather_drops
-        if not want:
-            drops.clear()
-            return
-        while len(drops) < want:
-            drops.append(self._new_drop(kind, random.uniform(0, H)))
-        del drops[want:]
-        # drops drift with the camera a little so the world doesn't seem to slide under them
-        cam = tuple(self.cam_pos)
-        if self.weather_cam is None or getattr(self, "local", False):
-            self.weather_cam = cam
-        mx, my = cam[0] - self.weather_cam[0], cam[1] - self.weather_cam[1]
-        self.weather_cam = cam
-        if abs(mx) + abs(my) > 200:      # teleported (cave / respawn): don't smear everything
-            mx = my = 0
-        wind = -140 if kind == "storm" else -50 if kind == "rain" else 0
-        t = self.flame_t
-        for d in drops:
-            if kind == "snow":
-                d[0] += math.sin(t * 1.3 + d[3] * 7) * 22 * dt - mx * 0.9
-                d[1] -= d[2] * dt + my * 0.9
-            else:
-                d[0] += wind * dt - mx * 0.9
-                d[1] -= d[2] * dt + my * 0.9
-            if d[1] < -20:
-                d[:] = self._new_drop(kind, H + random.uniform(0, 40))
-            if d[0] < -30:
-                d[0] += W + 60
-            elif d[0] > W + 30:
-                d[0] -= W + 60
-            if d[1] > H + 60:
-                d[1] -= H + 60
-
-    @staticmethod
-    def _new_drop(kind, y):
-        if kind == "snow":
-            return [random.uniform(-30, W + 30), y, random.uniform(40, 95), random.random()]
-        fast = 1.35 if kind == "storm" else 1.0
-        return [random.uniform(-30, W + 30), y, random.uniform(650, 900) * fast, random.uniform(10, 20) * fast]
+        self.wx_tick(dt)     # weather3d.py: wet ground, snow cover, wind, the lightning bolt
 
     def draw_weather_3d(self, vl):
-        """Screen overlay drawn over the 3D world (view3d.draw_world_3d), under the HUD."""
+        """Screen overlay drawn over the 3D world (view3d.draw_world_3d), under the HUD: the season's tint and
+        the weather's mood. The rain, snow and lightning themselves are 3D now (weather3d.py)."""
         if vl != "over":                 # underground: just the layer's own haze (biomes.LayerInfo.fog)
             fog = self.biome_fog() if hasattr(self, "layout") else None
             if fog:
@@ -267,22 +228,6 @@ class Weather:
             r, g, b, a = tint
             a = a * k * (night * FLAT_FOG if kind == "fog" else 1)     # fog: thicker far away is the shaders' job
             arcade.draw_lrbt_rectangle_filled(0, W, 0, H, (r, g, b, int(a)))
-        drops = self.weather_drops
-        n = int(len(drops) * k)
-        if n and kind in ("rain", "storm"):
-            slant = 0.35 if kind == "storm" else 0.12
-            pts = []
-            for d in drops[:n]:
-                pts.append((d[0], d[1]))
-                pts.append((d[0] - d[3] * slant, d[1] + d[3]))
-            arcade.draw_lines(pts, (175, 195, 230, int(150 * night)), 1)
-        elif n and kind == "snow":
-            big = [(d[0], d[1]) for d in drops[:n] if d[3] > 0.6]
-            small = [(d[0], d[1]) for d in drops[:n] if d[3] <= 0.6]
-            arcade.draw_points(small, (240, 245, 255, int(210 * night)), 3)
-            arcade.draw_points(big, (250, 252, 255, int(235 * night)), 5)
-        if self.weather_flash > 0:
-            arcade.draw_lrbt_rectangle_filled(0, W, 0, H, (235, 240, 255, int(150 * self.weather_flash ** 2)))
 
     def draw_weather_hud(self, y):
         """One line under the day clock: season (+ day of it) and the weather. Returns the next free y."""

@@ -138,7 +138,7 @@ void main() {
     float speed = length(v_flow);
     // calmer ripples in deep, slow water; choppier in fast shallows
     float chop = 0.75 + 0.5 * clamp(speed / 60.0, 0.0, 1.0) * (1.2 - v_depth);
-    vec3 n = normalize(vec3(-rp.yz * chop, 1.0));
+    vec3 n = lt_rain_normal(normalize(vec3(-rp.yz * chop, 1.0)), v_pos.xy);     // + rain rings (weather3d.py)
     float deep = v_depth * smoothstep(0.0, 60.0, v_shore);
     vec3 body = mix(SHALLOW, DEEP, deep);
     vec3 col = water_light(body, v_pos, n);
@@ -238,6 +238,7 @@ void main() {
         float blend;
         vec3 rp = flowing(gs_world.xy, vec2(0.0), blend);
         vec3 n = normalize(vec3(-rp.yz * (murky == 1 ? 0.5 : 0.8), 1.0));     // still, thick bog water
+        n = lt_rain_normal(n, gs_world.xy);                                    // + rain rings (weather3d.py)
         // the painted water (with its shading) is the body colour, pulled a little deeper (bog water stays
         // its own murky green); the ripples, sky and sun do the rest
         vec3 deep = murky == 1 ? body : mix(body, vec3(0.10, 0.28, 0.41), 0.25);

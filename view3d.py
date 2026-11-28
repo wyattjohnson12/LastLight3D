@@ -209,6 +209,7 @@ void main() {
     vec4 t = texture(sprite_texture, gs_uv);
     if (t.a <= alpha_cut) discard;      // also drops the painted-on shadows of the 2D art
     vec4 c = t * gs_color * spritelist_color;
+    if (upright == 0) c.rgb = lt_weather(c.rgb, p, lt_face(p), 1.0);     // wet / snowy ground (weather3d.py)
     // sun shadows (lighting3d.py / shadows3d.py): the ground and what lies on it face the way the ground does
     float sun = no_sun == 1 ? 1.0 : lt_sunlit(p, upright == 1 ? vec3(0.0) : lt_face(p));
     f_color = vec4(lt_fogged(c.rgb * lt_light(p, vec3(0.0)) * sun, p), c.a);
@@ -238,7 +239,7 @@ in vec3 v_pos;
 out vec4 f_color;
 void main() {
     vec3 n = lt_face(v_pos);
-    vec3 rgb = v_col.rgb * lt_light(v_pos, n) * lt_sunlit(v_pos, n);
+    vec3 rgb = lt_weather(v_col.rgb, v_pos, n, 1.0) * lt_light(v_pos, n) * lt_sunlit(v_pos, n);
     f_color = vec4(lt_fogged(rgb, v_pos), v_col.a);
 }
 """
@@ -346,7 +347,7 @@ vec3 pattern(vec2 st, vec3 base) {
 void main() {
     vec3 n = normalize(v_nrm);
     vec2 st = vec2(abs(n.x) > 0.5 ? v_pos.y : v_pos.x, v_pos.z);
-    vec3 alb = pattern(st, v_col);
+    vec3 alb = lt_weather(pattern(st, v_col), v_pos, n, 0.0);     // wet walls, snow on ledges (weather3d.py)
     float ao = mix(0.5, 1.0, v_h);          // darker towards the foot (the old blocks had this baked in)
     vec3 day = (0.62 * lt_hemi(n) + 0.38 * max(dot(n, lt_fill.xyz), 0.0) + 0.25 * max(dot(n, lt_sun.xyz), 0.0)) * ao;
     day *= lt_sunlit(v_pos, n);             // in the shadow of a tree or another wall (shadows3d.py)
@@ -1005,7 +1006,8 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         self.biome_draw3d(L, vl)     # biomes.py: plug-ins' own 3D props (highland ledges, rolling boulders...)
         if fp:
             self.fp_hide_me(False)
-        self.sky_dome(vl, dk)        # sky3d.py: first person sky - only where nothing was drawn
+        self.ao_apply(vl)            # ao3d.py: ambient occlusion (+ ground mist) on what's drawn so far
+        self.sky_dome(vl, dk)        # sky3d.py: first person sky - only where nothing was drawn (after AO: never shaded)
 
         # ---- build preview & tame target
         if self.state == "playing" and self.me and not self.ui_open and not self.cut:
@@ -1037,6 +1039,7 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
                 self.ground_ring(t.center_x, t.center_y, 30, (255, 150, 190, 200), 2, lit=True)
         ctx.enable(ctx.DEPTH_TEST)
         self.fx_draw_particles(vl, additive=False)    # chips, dust, blood, smoke (lit like the rest)
+        self.wx_draw_precip(vl)      # weather3d.py: rain / snow falling round the camera
         ctx.disable(ctx.DEPTH_TEST)
         self._lt.write("glow")      # glows from here on: not darkened, faded out (not fogged) far away
 
@@ -1083,12 +1086,13 @@ class View3D(terrain3d.Terrain3D, fx3d.FX3D, models3d.CreatureModels, shadows3d.
         self.use_world3d()           # embers, sparks and flames glow on top of the night
         ctx.enable(ctx.DEPTH_TEST)
         self.fx_draw_particles(vl, additive=True)
+        self.wx_draw_bolt(vl)        # weather3d.py: first person - the lightning bolt in the sky
         ctx.disable(ctx.DEPTH_TEST)
         self.gui.use()
         self.post_end(dk)            # post3d.py: bloom + colour grade onto the screen (HUD etc. come after)
         self.fx_vignette(dk)         # fx3d.py: night vignette on the finished picture (not bloomed)
 
-        self.draw_weather_3d(vl)  # weather.py: rain / snow / fog and the season's tint
+        self.draw_weather_3d(vl)  # weather.py: the season's tint and the weather's mood
         self.draw_repair_bars(L)  # repair.py: holding the hammer shows how hurt buildings are
         self.draw_shots(vl)      # after the darkness: a burning fire pot shows up at night
 

@@ -26,6 +26,7 @@ import biomes  # noqa: E402  (biome registry; then every biome / terrain / layer
 biomes.load_plugins()
 import lairs  # noqa: E402  (the bosses' lairs: registers itself like the biome plug-ins, after them)
 import base  # noqa: F401  (also early: adds the Base Flag recipe before ui.py reads the tabs)
+import ao3d
 import art
 import art_bees
 import art_defenses
@@ -50,6 +51,7 @@ import ui
 import venom
 import view3d
 import weather
+import weather3d
 from gamepad import Gamepad
 from settings import *
 from world import LAYERS, Animal, Boss, Hazard, Node, Shot, Structure, Zombie, build_world, dist
@@ -152,7 +154,7 @@ class Survivor:
 
 
 # =========================================================================== game
-class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coop.LocalCoop, view3d.View3D, post3d.Post3D, options.Options, spells.Spells, savegame.SaveGame, pets.Pets, repair.Repair,
+class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coop.LocalCoop, weather3d.Weather3D, ao3d.AO3D, view3d.View3D, post3d.Post3D, options.Options, spells.Spells, savegame.SaveGame, pets.Pets, repair.Repair,
                 backpack.Backpacks,
                 progress.Progress, weather.Weather, defenses.Defenses, swamp.Swamp, ui.UI, arcade.Window):
     def __init__(self):
