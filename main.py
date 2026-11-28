@@ -41,6 +41,7 @@ import net
 import options
 import post3d
 import pets
+import petpath
 import progress
 import repair
 import savegame
@@ -1994,7 +1995,16 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
                 vx, vy = vx / n, vy / n
                 step = speed * dt
                 blocked, moved = self.step_body(a, vx * step, vy * step, [] if a.info.get("flies") else blockers)
-                if blocked and moved < step * 0.35 and a.detour <= 0:
+                if a.pet and petpath.no_progress(self, a, bool(blocked), dt):   # petpath.py: plan a way around
+                    if petpath.unstick(self, a, blockers):
+                        if getattr(a, "path", None):
+                            a.detour = 0.0
+                    else:                  # no way there at all: forget it and pick something else
+                        if isinstance(a.goal, Node):
+                            petpath.skip(self, a, a.goal)
+                            a.goal = None
+                        a.want = None
+                if blocked and moved < step * 0.35 and a.detour <= 0 and not getattr(a, "path", None):
                     side = random.choice((-1, 1))
                     a.detour_dir = (-vy * side, vx * side)
                     a.detour = random.uniform(0.4, 0.9)
@@ -2052,11 +2062,17 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         owner_here = owner is not None and owner.alive and owner.layer == "over"
 
         def go(x, y, slack=40, speed=sp):
-            dx, dy = x - a.center_x, y - a.center_y
-            d = math.hypot(dx, dy)
-            if d < slack:
+            if a.info.get("flies"):        # bees fly over everything: straight there
+                dx, dy = x - a.center_x, y - a.center_y
+                d = math.hypot(dx, dy)
+                if d < slack:
+                    return 0.0, 0.0, 0.0
+                return dx / d, dy / d, speed
+            way = petpath.steer(self, a, x, y, slack, dt)    # petpath.py: around walls, huts and cliffs
+            if way is None:
+                a.want = None
                 return 0.0, 0.0, 0.0
-            return dx / d, dy / d, speed
+            return way[0], way[1], speed
 
         # guards always defend: bite zombies close to the pet / its owner / the base
         if job == "guard" and a.mode != "stay":
@@ -2130,7 +2146,8 @@ class LastLight(biomes.BiomeWorld, base.Base, firstperson.FirstPerson, local_coo
         if not isinstance(a.goal, Node) or a.goal.state != "full":
             ref = home.position if home else a.position
             cands = [n for lst in self.over.node_lists() for n in lst
-                     if n.kind in kinds and n.state == "full" and dist(n.position, ref) < 900]
+                     if n.kind in kinds and n.state == "full" and dist(n.position, ref) < 900
+                     and not petpath.skipped(self, a, n)]       # (ones it found no way to are left a while)
             a.goal = min(cands, key=lambda n: dist(n.position, a.position)) if cands else None
             if a.goal is None:
                 if a.carrying:
